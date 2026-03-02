@@ -5,7 +5,7 @@ __pycache__/
 .env
 .ipynb_checkpoints/
 
-# Data + outputs
+# Data + outputs (keep proprietary data out of git)
 data/**
 outputs/**
 *.parquet

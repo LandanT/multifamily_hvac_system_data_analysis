@@ -1,11 +1,7 @@
-# RBSA analysis
+# RBSA analysis scripts
 
-Put runnable workflow scripts here.
+- `01_build_curated_mf_table.py` — build curated table (SiteID ↔ Building_ID, classify HVAC/DHW, join usage)
+- `02_sanity_checks.py` — quick QC summaries
 
-Example:
-- `build_curated_mf_table.py` — create a multifamily combined table:
-  - SiteID ↔ Building_ID
-  - HVAC/DHW system-type classification
-  - annual + monthly energy metrics
-
-Write outputs to `outputs/rbsa/` (gitignored).
+Edit system classification rules in:
+- `src/datasets/rbsa/classify.py`

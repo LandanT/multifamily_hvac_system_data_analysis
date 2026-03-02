@@ -1,16 +1,16 @@
 # Building Systems & Energy Use Analysis
 
-Repeatable workflows to classify **central vs distributed HVAC/DHW** and compare **energy consumption**
-across datasets (NEAA RBSA first; later CBECS and real building data).
+This repo supports repeatable workflows to classify **central vs distributed HVAC/DHW** and compare **energy consumption**.
 
-## Folder layout
-- `data/` — raw and staged datasets (gitignored)
-- `src/` — reusable dataset ingest + shared utilities
-- `analysis/` — runnable workflows per dataset and cross-dataset comparisons
-- `outputs/` — generated artifacts (gitignored)
-- `.github/copilot-instructions.md` — guidance for Copilot
+## Quick start (RBSA)
+1. Put RBSA raw files under `data/rbsa_2022/` **or** point scripts at the RBSA ZIP.
+2. Run:
 
-## Quick start
-1. Put source data under `data/<dataset>/` (e.g., `data/rbsa_2022/`).
-2. Run a workflow script from `analysis/<dataset>/`.
-3. Write curated outputs to `outputs/<dataset>/`.
+```bash
+python analysis/rbsa/01_build_curated_mf_table.py --zip /path/to/RBSA.zip --outdir outputs/rbsa
+python analysis/rbsa/02_sanity_checks.py --curated outputs/rbsa/rbsa_mf_curated_*.parquet
+```
+
+## Notes
+- Raw data is gitignored by default.
+- Classification rules live in `src/datasets/rbsa/classify.py`.

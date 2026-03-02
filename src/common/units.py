@@ -7,11 +7,11 @@ THERM_TO_KBTU = 100.0  # 1 therm = 100 kBtu
 
 
 def kwh_to_kbtu(kwh: float) -> float:
-    return kwh * KWH_TO_KBTU
+    return float(kwh) * KWH_TO_KBTU
 
 
 def therm_to_kbtu(therms: float) -> float:
-    return therms * THERM_TO_KBTU
+    return float(therms) * THERM_TO_KBTU
 
 
 def kbtu_total(electric_kwh: float | None = None, gas_therms: float | None = None) -> float | None:
@@ -19,9 +19,9 @@ def kbtu_total(electric_kwh: float | None = None, gas_therms: float | None = Non
         return None
     total = 0.0
     if electric_kwh is not None:
-        total += kwh_to_kbtu(float(electric_kwh))
+        total += kwh_to_kbtu(electric_kwh)
     if gas_therms is not None:
-        total += therm_to_kbtu(float(gas_therms))
+        total += therm_to_kbtu(gas_therms)
     return total
 
 
