@@ -1,0 +1,261 @@
+"""Prompt 5 (part 1) — Exploratory Distributions.
+
+Produces:
+  1. Box plots of Site_EUI_kBtu_sqft and Electric_EUI_kBtu_sqft by
+     heating_system_type, cooling_system_type, and dhw_system_type.
+  2. Confounding check: Heating_Zone stacked bars within each system-type
+     category.
+  3. Cross-tab of heating_system_type × cooling_system_type.
+  4. Summary stats (n, median, IQR, mean) for each group — saved as CSV.
+
+Input is the pre-built site master parquet (output of 01_build_curated_mf_table.py).
+SF focus for EUI analysis (per Prompt 5 spec) but MF unit rows are also shown.
+
+Usage::
+
+    python analysis/rbsa/02_exploratory_distributions.py \\
+        --site-master outputs/rbsa/rbsa_site_master_*.parquet \\
+        --outdir outputs/rbsa
+"""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+import numpy as np
+import pandas as pd
+
+from src.common.log import get_logger
+
+logger = get_logger("rbsa.02_explore")
+
+EUI_COLS = ["Site_EUI_kBtu_sqft", "Electric_EUI_kBtu_sqft"]
+SYSTEM_COLS = ["heating_system_type", "cooling_system_type", "dhw_system_type"]
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _load_site_master(path: Path) -> pd.DataFrame:
+    return (
+        pd.read_parquet(path)
+        if path.suffix.lower() == ".parquet"
+        else pd.read_csv(path, low_memory=False)
+    )
+
+
+def _bt_col(df: pd.DataFrame) -> str | None:
+    return next((c for c in ["Building_Type", "Building Type"] if c in df.columns), None)
+
+
+def make_boxplots(df: pd.DataFrame, system_col: str, eui_cols: list[str], outdir: Path) -> None:
+    """Save one figure with one subplot per EUI metric."""
+    present = [c for c in eui_cols if c in df.columns and df[c].notna().any()]
+    if not present:
+        logger.warning("No EUI columns found for boxplot — skipping %s", system_col)
+        return
+
+    fig, axes = plt.subplots(1, len(present), figsize=(6 * len(present), 5))
+    if len(present) == 1:
+        axes = [axes]
+
+    groups_raw = [g for g in df[system_col].dropna().unique() if g != "Unknown"]
+    if "Unknown" in df[system_col].unique():
+        groups_raw.append("Unknown")
+
+    for ax, eui_col in zip(axes, present):
+        data_by_group = {
+            g: df.loc[df[system_col] == g, eui_col].dropna()
+            for g in groups_raw
+        }
+        plot_data = [data_by_group[g].values for g in groups_raw]
+
+        bp = ax.boxplot(plot_data, labels=groups_raw, patch_artist=True, notch=False)
+        colors = plt.cm.Set2(np.linspace(0, 1, len(groups_raw)))
+        for patch, color in zip(bp["boxes"], colors):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.7)
+
+        ax.set_title(f"{eui_col}\nby {system_col}", fontsize=10)
+        ax.set_ylabel("kBtu/sqft/yr")
+        ax.set_xticklabels(groups_raw, rotation=20, ha="right", fontsize=8)
+        ax.yaxis.set_minor_locator(mticker.AutoMinorLocator())
+
+        ylim = ax.get_ylim()
+        for i, grp in enumerate(groups_raw):
+            n = len(data_by_group[grp])
+            ax.text(
+                i + 1, ylim[0] - 0.03 * (ylim[1] - ylim[0]),
+                f"n={n}", ha="center", va="top", fontsize=8, color="dimgray",
+            )
+
+        ax.text(
+            0.5, 1.01,
+            "⚠ Interpret with caution — check sample sizes",
+            transform=ax.transAxes,
+            ha="center", fontsize=7, color="red",
+        )
+
+    fig.suptitle(f"EUI Distribution by {system_col}", fontsize=12, fontweight="bold")
+    fig.tight_layout()
+
+    fname = outdir / f"02_boxplot_{system_col}.png"
+    fig.savefig(fname, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Saved %s", fname)
+
+
+def make_confounding_charts(df: pd.DataFrame, system_col: str, outdir: Path) -> None:
+    """Stacked bar of Heating_Zone distribution within each system type."""
+    for cat_col, label in [("Heating_Zone", "heating_zone"), (_bt_col(df), "building_type")]:
+        if cat_col is None or cat_col not in df.columns:
+            continue
+
+        sub = df[[system_col, cat_col]].dropna()
+        if sub.empty:
+            continue
+
+        xtab = pd.crosstab(sub[system_col], sub[cat_col], normalize="index")
+        if xtab.empty:
+            continue
+
+        fig, ax = plt.subplots(figsize=(8, 4))
+        xtab.plot(kind="bar", stacked=True, ax=ax, colormap="Set3", edgecolor="white")
+
+        counts = sub[system_col].value_counts()
+        for i, grp in enumerate(xtab.index):
+            n = counts.get(grp, 0)
+            ax.text(i, 1.02, f"n={n}", ha="center", fontsize=8, color="dimgray")
+
+        ax.set_title(f"{cat_col} distribution within {system_col}", fontsize=10)
+        ax.set_ylabel("Proportion")
+        ax.set_xticklabels(xtab.index, rotation=20, ha="right", fontsize=8)
+        ax.legend(loc="upper right", fontsize=7, title=cat_col)
+        fig.tight_layout()
+
+        fname = outdir / f"02_confounding_{system_col}_{label}.png"
+        fig.savefig(fname, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        logger.info("Saved %s", fname)
+
+
+def print_summary_stats(df: pd.DataFrame, system_col: str, eui_cols: list[str]) -> None:
+    present = [c for c in eui_cols if c in df.columns]
+    print(f"\n{'='*60}")
+    print(f"Summary stats — {system_col}")
+    print(f"{'='*60}")
+
+    rows = []
+    for grp, gdf in df.groupby(system_col):
+        row = {"system_type": grp}
+        for col in present:
+            vals = gdf[col].dropna()
+            row[f"n_{col[:12]}"] = len(vals)
+            row[f"median_{col[:12]}"] = round(vals.median(), 1) if len(vals) else None
+            row[f"IQR_{col[:12]}"] = (
+                round(vals.quantile(0.75) - vals.quantile(0.25), 1) if len(vals) else None
+            )
+            row[f"mean_{col[:12]}"] = round(vals.mean(), 1) if len(vals) else None
+        rows.append(row)
+
+    summary = pd.DataFrame(rows).set_index("system_type")
+    print(summary.to_string())
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Exploratory distributions for RBSA site master.")
+    ap.add_argument("--site-master", type=Path, required=True,
+                    help="Path to rbsa_site_master_*.parquet (or .csv) from 01_build_curated_mf_table.py")
+    ap.add_argument("--outdir", type=Path, default=Path("outputs/rbsa"),
+                    help="Directory for output figures and CSVs.")
+    ap.add_argument("--sf-only", action="store_true",
+                    help="Restrict EUI analysis to Single Family sites (Prompt 5 default).")
+    args = ap.parse_args()
+
+    args.outdir.mkdir(parents=True, exist_ok=True)
+
+    logger.info("Loading site master from %s", args.site_master)
+    df = _load_site_master(args.site_master)
+    logger.info("Loaded %d rows", len(df))
+
+    bt = _bt_col(df)
+    if args.sf_only and bt:
+        sf_mask = df[bt].str.lower().str.contains("single", na=False)
+        df = df[sf_mask].copy()
+        logger.info("SF-only filter: %d rows", len(df))
+
+    # Filter to rows with at least one EUI value
+    has_eui = df[EUI_COLS].notna().any(axis=1)
+    df = df[has_eui].copy()
+    logger.info("Rows with at least one EUI value: %d", len(df))
+
+    # ---- 1. Box plots ------------------------------------------------
+    logger.info("Generating box plots …")
+    for sys_col in SYSTEM_COLS:
+        if sys_col in df.columns:
+            make_boxplots(df, sys_col, EUI_COLS, args.outdir)
+
+    # ---- 2. Confounding checks ----------------------------------------
+    logger.info("Generating confounding charts …")
+    for sys_col in SYSTEM_COLS:
+        if sys_col in df.columns:
+            make_confounding_charts(df, sys_col, args.outdir)
+
+    # ---- 3. Cross-tab heating × cooling ------------------------------
+    if "heating_system_type" in df.columns and "cooling_system_type" in df.columns:
+        print("\n--- Cross-tab: heating_system_type × cooling_system_type ---")
+        xtab = pd.crosstab(
+            df["heating_system_type"],
+            df["cooling_system_type"],
+            margins=True,
+            margins_name="Total",
+        )
+        print(xtab.to_string())
+        xtab.to_csv(args.outdir / "02_xtab_heating_x_cooling.csv")
+
+    # ---- 4. Summary stats -------------------------------------------
+    for sys_col in SYSTEM_COLS:
+        if sys_col in df.columns:
+            print_summary_stats(df, sys_col, EUI_COLS)
+
+    # Save summary CSV
+    rows = []
+    for sys_col in SYSTEM_COLS:
+        if sys_col not in df.columns:
+            continue
+        for grp, gdf in df.groupby(sys_col):
+            for col in EUI_COLS:
+                if col not in gdf.columns:
+                    continue
+                vals = gdf[col].dropna()
+                rows.append({
+                    "system_col": sys_col,
+                    "group": grp,
+                    "eui_metric": col,
+                    "n": len(vals),
+                    "median": round(vals.median(), 2) if len(vals) else None,
+                    "q25": round(vals.quantile(0.25), 2) if len(vals) else None,
+                    "q75": round(vals.quantile(0.75), 2) if len(vals) else None,
+                    "iqr": round(vals.quantile(0.75) - vals.quantile(0.25), 2) if len(vals) else None,
+                    "mean": round(vals.mean(), 2) if len(vals) else None,
+                    "std": round(vals.std(), 2) if len(vals) else None,
+                })
+
+    pd.DataFrame(rows).to_csv(args.outdir / "02_summary_stats.csv", index=False)
+    logger.info("Saved summary stats CSV.")
+
+
+if __name__ == "__main__":
+    main()

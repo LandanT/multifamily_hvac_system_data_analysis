@@ -37,7 +37,7 @@ import pandas as pd
 from src.datasets.fm_mf_survey.ingest import load_mf_survey, load_energy_subset
 from src.datasets.fm_mf_survey.classify import add_system_classifications, to_binary
 from src.datasets.rbsa.ingest import load_rbsa_from_zip, load_rbsa_from_dir
-from src.datasets.rbsa.classify import classify_hvac, classify_dhw as rbsa_classify_dhw
+from src.datasets.rbsa.classify import add_site_classifications
 from src.common.log import get_logger
 
 logger = get_logger("fm_mf_survey.06_compare")
@@ -116,64 +116,49 @@ def mf_survey_summaries(mf_path: Path) -> dict[str, pd.DataFrame]:
 
 
 def rbsa_summaries(rbsa_zip: Optional[Path], rbsa_dir: Optional[Path]) -> dict[str, pd.DataFrame]:
-    """Load, classify, and summarise RBSA data."""
+    """Load, classify, and summarise RBSA data using site-level classifications."""
     if rbsa_zip:
         inputs = load_rbsa_from_zip(rbsa_zip)
     else:
         inputs = load_rbsa_from_dir(rbsa_dir)
 
-    site = inputs.site_detail.copy()
-    usage = inputs.usage_one_line.copy()
-    hvac = inputs.mf_hvac.copy()
-    dhw = inputs.mf_dhw.copy()
+    # Build master site table: SiteDetail + Usage + Mechanical_One_Line columns
+    mol_keep = [c for c in [
+        "SiteID", "Primary_Heating_System_Type", "Primary_Cooling_System_Type", "Primary_Heating_Fuel_Type",
+    ] if c in inputs.mech_one_line.columns]
+    master = inputs.site_detail.merge(inputs.usage_one_line, on="SiteID", how="left")
+    master = master.merge(inputs.mech_one_line[mol_keep], on="SiteID", how="left")
 
-    # Classify
-    hvac["hvac_binary"] = hvac.apply(
-        lambda r: _to_binary_rbsa(classify_hvac(r).label), axis=1
-    )
-    dhw["dhw_binary"] = dhw.apply(
-        lambda r: _to_binary_rbsa(rbsa_classify_dhw(r).label), axis=1
-    )
+    # Compute Site EUI
+    if "Conditioned_Area" in master.columns and "Annual Usage Total (kBtu)" in master.columns:
+        master["Conditioned_Area"] = pd.to_numeric(master["Conditioned_Area"], errors="coerce")
+        master["Annual Usage Total (kBtu)"] = pd.to_numeric(master["Annual Usage Total (kBtu)"], errors="coerce")
+        master["Site_EUI_kBtu_sqft"] = master["Annual Usage Total (kBtu)"] / master["Conditioned_Area"]
+    else:
+        master["Site_EUI_kBtu_sqft"] = None
 
-    # Join to usage for EUI
-    # RBSA may not have Source EUI — we look for plausible column names
-    usage_merged_hvac = (
-        site[["SiteID", "Building_ID"]]
-        .merge(hvac[["Building_ID", "hvac_binary"]], on="Building_ID", how="left")
-        .merge(usage, on="SiteID", how="left")
-    )
-    usage_merged_dhw = (
-        site[["SiteID", "Building_ID"]]
-        .merge(dhw[["Building_ID", "dhw_binary"]], on="Building_ID", how="left")
-        .merge(usage, on="SiteID", how="left")
-    )
+    # Apply site-level HVAC + DHW classifications
+    master = add_site_classifications(master, inputs.mech_wh)
 
-    # Detect EUI columns (names vary by RBSA version)
-    def _find_eui_cols(df):
-        candidates = []
-        for c in df.columns:
-            cl = c.lower()
-            if "eui" in cl or "kbtu" in cl:
-                candidates.append(c)
-        return candidates
-
-    hvac_eui = _find_eui_cols(usage_merged_hvac)
-    dhw_eui = _find_eui_cols(usage_merged_dhw)
-
+    eui_col = "Site_EUI_kBtu_sqft"
     summaries = {}
 
-    if hvac_eui:
-        sub_hvac = usage_merged_hvac[usage_merged_hvac["hvac_binary"].notna()]
-        summaries["heating"] = _eui_summary(sub_hvac, "hvac_binary", hvac_eui, "RBSA")
-        summaries["cooling"] = summaries["heating"].copy()  # same HVAC classification
-    else:
-        logger.warning("No EUI columns found in RBSA HVAC usage merge.")
-
-    if dhw_eui:
-        sub_dhw = usage_merged_dhw[usage_merged_dhw["dhw_binary"].notna()]
-        summaries["dhw"] = _eui_summary(sub_dhw, "dhw_binary", dhw_eui, "RBSA")
-    else:
-        logger.warning("No EUI columns found in RBSA DHW usage merge.")
+    for sys_col, key in [
+        ("heating_system_type", "heating"),
+        ("cooling_system_type", "cooling"),
+        ("dhw_system_type", "dhw"),
+    ]:
+        if sys_col not in master.columns:
+            continue
+        # Map RBSA labels to binary for _eui_summary
+        master["_rbsa_binary"] = master[sys_col].apply(
+            lambda v: _to_binary_rbsa(v) if isinstance(v, str) else None
+        )
+        sub = master[master[eui_col].notna() & master["_rbsa_binary"].notna()]
+        if sub.empty:
+            logger.warning("No data for RBSA %s — skipping", key)
+            continue
+        summaries[key] = _eui_summary(sub, "_rbsa_binary", [eui_col], "RBSA")
 
     return summaries
 
