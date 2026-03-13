@@ -12,9 +12,9 @@ For each pair (Central vs. Distributed) × (DHW / Heating / Cooling):
 
 Usage::
 
-    python analysis/mf_survey/03_statistical_testing.py \\
+    python analysis/fm_mf_survey/03_statistical_testing.py \\
         --data path/to/2023_Multifamily_Survey_dataset_FINAL.xlsx \\
-        [--outdir outputs/mf_survey]
+        [--outdir outputs/fm_mf_survey]
 """
 
 from __future__ import annotations
@@ -26,11 +26,11 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from src.datasets.mf_survey.ingest import load_mf_survey, load_energy_subset
-from src.datasets.mf_survey.classify import add_system_classifications, to_binary
+from src.datasets.fm_mf_survey.ingest import load_mf_survey, load_energy_subset
+from src.datasets.fm_mf_survey.classify import add_system_classifications, to_binary
 from src.common.log import get_logger
 
-logger = get_logger("mf_survey.03_stats")
+logger = get_logger("fm_mf_survey.03_stats")
 
 ALPHA = 0.05
 

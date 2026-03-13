@@ -8,7 +8,7 @@ So we load with ``header=1`` to use the field-name row as the column index.
 
 Usage::
 
-    from src.datasets.mf_survey.ingest import load_mf_survey, load_energy_subset
+    from src.datasets.fm_mf_survey.ingest import load_mf_survey, load_energy_subset
 
     df = load_mf_survey("path/to/2023_Multifamily_Survey_dataset_FINAL.xlsx")
     df_energy = load_energy_subset(df)

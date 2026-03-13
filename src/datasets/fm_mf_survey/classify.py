@@ -166,7 +166,7 @@ def add_system_classifications(df: pd.DataFrame) -> pd.DataFrame:
     ----------
     df:
         DataFrame (typically the energy-analysis subset) from
-        :func:`src.datasets.mf_survey.ingest.load_mf_survey`.
+        :func:`src.datasets.fm_mf_survey.ingest.load_mf_survey`.
 
     Returns
     -------

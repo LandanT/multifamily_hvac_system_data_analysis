@@ -9,9 +9,9 @@ classification functions, and prints a summary of:
 
 Usage::
 
-    python analysis/mf_survey/01_load_and_classify.py \\
+    python analysis/fm_mf_survey/01_load_and_classify.py \\
         --data path/to/2023_Multifamily_Survey_dataset_FINAL.xlsx \\
-        [--outdir outputs/mf_survey]
+        [--outdir outputs/fm_mf_survey]
 """
 
 from __future__ import annotations
@@ -21,11 +21,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.datasets.mf_survey.ingest import load_mf_survey, load_energy_subset
-from src.datasets.mf_survey.classify import add_system_classifications, classifiable_mask
+from src.datasets.fm_mf_survey.ingest import load_mf_survey, load_energy_subset
+from src.datasets.fm_mf_survey.classify import add_system_classifications, classifiable_mask
 from src.common.log import get_logger
 
-logger = get_logger("mf_survey.01_load_classify")
+logger = get_logger("fm_mf_survey.01_load_classify")
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +146,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     if args.outdir:
         args.outdir.mkdir(parents=True, exist_ok=True)
-        out_path = args.outdir / "mf_survey_classified.csv"
+        out_path = args.outdir / "fm_mf_survey_classified.csv"
         save_cols = cls_cols + [
             "Hot Water Heating Location",
             "Residential Hot Water System",

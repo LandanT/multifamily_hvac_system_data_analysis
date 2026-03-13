@@ -13,10 +13,10 @@ For each dataset:
 
 Usage::
 
-    python analysis/mf_survey/06_compare_with_rbsa.py \\
+    python analysis/fm_mf_survey/06_compare_with_rbsa.py \\
         --mf-data  path/to/2023_Multifamily_Survey_dataset_FINAL.xlsx \\
         --rbsa-zip path/to/rbsa_data.zip       # OR --rbsa-dir path/to/rbsa/
-        [--outdir outputs/mf_survey]
+        [--outdir outputs/fm_mf_survey]
 
 Notes:
   * The RBSA dataset uses column-prefix-based classification (COMMON* vs TENANT*).
@@ -34,13 +34,13 @@ from typing import Optional
 
 import pandas as pd
 
-from src.datasets.mf_survey.ingest import load_mf_survey, load_energy_subset
-from src.datasets.mf_survey.classify import add_system_classifications, to_binary
+from src.datasets.fm_mf_survey.ingest import load_mf_survey, load_energy_subset
+from src.datasets.fm_mf_survey.classify import add_system_classifications, to_binary
 from src.datasets.rbsa.ingest import load_rbsa_from_zip, load_rbsa_from_dir
 from src.datasets.rbsa.classify import classify_hvac, classify_dhw as rbsa_classify_dhw
 from src.common.log import get_logger
 
-logger = get_logger("mf_survey.06_compare")
+logger = get_logger("fm_mf_survey.06_compare")
 
 _CENTRAL = {"Central", "Central (inferred)", "central", "mixed"}
 _DISTRIBUTED = {"Distributed", "Distributed (inferred)", "distributed"}
@@ -263,7 +263,7 @@ def main() -> None:
                     help="Path to RBSA zip file.")
     ap.add_argument("--rbsa-dir", type=Path, default=None,
                     help="Path to directory containing extracted RBSA CSVs.")
-    ap.add_argument("--outdir", type=Path, default=Path("outputs/mf_survey"),
+    ap.add_argument("--outdir", type=Path, default=Path("outputs/fm_mf_survey"),
                     help="Directory for output files.")
     args = ap.parse_args()
 

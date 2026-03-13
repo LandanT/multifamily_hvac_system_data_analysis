@@ -16,7 +16,7 @@ vs. energy consumption, using the 2023 Multifamily Survey dataset.
 ## Source modules
 
 ```
-src/datasets/mf_survey/
+src/datasets/fm_mf_survey/
     ingest.py    — load_mf_survey(), load_energy_subset(), helpers
     classify.py  — classify_dhw(), classify_heating(), classify_cooling(),
                    add_system_classifications(), to_binary()
@@ -40,35 +40,35 @@ src/datasets/mf_survey/
 pip install -e ".[dev]"   # or: pip install openpyxl scipy matplotlib statsmodels
 
 # Prompt 1 — classification summary
-python analysis/mf_survey/01_load_and_classify.py \
+python analysis/fm_mf_survey/01_load_and_classify.py \
     --data /path/to/2023_Multifamily_Survey_dataset_FINAL.xlsx \
-    --outdir outputs/mf_survey
+    --outdir outputs/fm_mf_survey
 
 # Prompt 2 — exploratory distributions
-python analysis/mf_survey/02_exploratory_distributions.py \
+python analysis/fm_mf_survey/02_exploratory_distributions.py \
     --data /path/to/2023_Multifamily_Survey_dataset_FINAL.xlsx \
-    --outdir outputs/mf_survey
+    --outdir outputs/fm_mf_survey
 
 # Prompt 3 — statistical tests
-python analysis/mf_survey/03_statistical_testing.py \
+python analysis/fm_mf_survey/03_statistical_testing.py \
     --data /path/to/2023_Multifamily_Survey_dataset_FINAL.xlsx \
-    --outdir outputs/mf_survey
+    --outdir outputs/fm_mf_survey
 
 # Prompt 4 — climate-controlled comparison
-python analysis/mf_survey/04_climate_controlled.py \
+python analysis/fm_mf_survey/04_climate_controlled.py \
     --data /path/to/2023_Multifamily_Survey_dataset_FINAL.xlsx \
-    --outdir outputs/mf_survey
+    --outdir outputs/fm_mf_survey
 
 # Prompt 5 — fuel breakdown
-python analysis/mf_survey/05_fuel_breakdown.py \
+python analysis/fm_mf_survey/05_fuel_breakdown.py \
     --data /path/to/2023_Multifamily_Survey_dataset_FINAL.xlsx \
-    --outdir outputs/mf_survey
+    --outdir outputs/fm_mf_survey
 
 # Prompt 6 — side-by-side comparison with RBSA
-python analysis/mf_survey/06_compare_with_rbsa.py \
+python analysis/fm_mf_survey/06_compare_with_rbsa.py \
     --mf-data  /path/to/2023_Multifamily_Survey_dataset_FINAL.xlsx \
     --rbsa-zip /path/to/rbsa_data.zip \
-    --outdir   outputs/mf_survey
+    --outdir   outputs/fm_mf_survey
 ```
 
 ## Classification logic
