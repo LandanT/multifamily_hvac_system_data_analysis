@@ -1,79 +1,275 @@
-"""RBSA MF curated table builder (thin structure)."""
+"""RBSA curated table builder — Prompts 1–4.
+
+Implements:
+  Prompt 1: Master analysis table (SiteDetail + Usage_One_Line + Mechanical_One_Line + EUI)
+  Prompt 2: Site-level HVAC classification (Central / Distributed / Unknown)
+  Prompt 3: Site-level DHW classification (from Mechanical_WaterHeater.csv)
+  Prompt 4: MF building-level HVAC/DHW classification (from MF_Building_* tables)
+
+Outputs (written to --outdir):
+  rbsa_site_master.{parquet,csv}    — all sites with system classifications and EUI
+  rbsa_mf_buildings.{parquet,csv}  — MF building-level HVAC/DHW classifications
+
+Usage::
+
+    python analysis/rbsa/01_build_curated_mf_table.py \\
+        --data-dir path/to/2022_RBSA_Datasets/ \\
+        --outdir outputs/rbsa
+
+    # or from a zip:
+    python analysis/rbsa/01_build_curated_mf_table.py \\
+        --zip path/to/rbsa_2022.zip \\
+        --outdir outputs/rbsa
+"""
 
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
 import datetime as dt
+
 import pandas as pd
 
 from src.common.log import get_logger
 from src.datasets.rbsa.ingest import load_rbsa_from_zip, load_rbsa_from_dir
-from src.datasets.rbsa.classify import classify_hvac, classify_dhw
+from src.datasets.rbsa.classify import add_site_classifications, add_mf_building_classifications
 
-logger = get_logger("rbsa.curate")
+logger = get_logger("rbsa.build")
 
 
-def detect_multifamily(site_detail: pd.DataFrame) -> pd.Series:
-    if "Building Type" in site_detail.columns:
-        s = site_detail["Building Type"].astype(str).str.lower()
-        return s.str.contains("multi") | s.str.contains("mf")
-    # fallback: keep all
-    logger.warning("No obvious multifamily column found; keeping all sites. Use --include-all-sites to silence.")
-    return pd.Series([True] * len(site_detail), index=site_detail.index)
+# ---------------------------------------------------------------------------
+# Step 1: Master site analysis table
+# ---------------------------------------------------------------------------
 
+_MECH_OL_KEEP = [
+    "SiteID",
+    "Primary_Heating_System_Type",
+    "Primary_Cooling_System_Type",
+    "Primary_Heating_Fuel_Type",
+]
+
+_USAGE_KEEP = [
+    "SiteID",
+    "Annual Electric Usage (kWh)",
+    "Annual Electric Usage (kBtu)",
+    "Annual Gas Usage (therms)",
+    "Annual Gas Usage (kBtu)",
+    "Annual Usage Total (kBtu)",
+    "Annual Usage Total for Heating (kBtu)",
+    "Annual Electric Usage for Heating (kBtu)",
+    "Annual Gas Usage for Heating (kBtu)",
+    "Total Delivered Fuel (kBtu)",
+    "Ownership",
+    "Qty_Occupants",
+]
+
+
+def _build_site_master(inputs) -> pd.DataFrame:
+    """Prompt 1: Join SiteDetail + Usage + Mechanical_One_Line; compute EUI."""
+    site = inputs.site_detail.copy()
+
+    # Conditioned_Area lives in SiteDetail
+    usage_cols = [c for c in _USAGE_KEEP if c in inputs.usage_one_line.columns]
+    usage = inputs.usage_one_line[usage_cols].copy()
+
+    mol_cols = [c for c in _MECH_OL_KEEP if c in inputs.mech_one_line.columns]
+    mol = inputs.mech_one_line[mol_cols].copy()
+
+    # Coerce energy columns to numeric
+    for col in usage.columns:
+        if col != "SiteID":
+            usage[col] = pd.to_numeric(usage[col], errors="coerce")
+
+    master = site.merge(usage, on="SiteID", how="left")
+    master = master.merge(mol, on="SiteID", how="left")
+
+    logger.info("Master join: %d rows (expected ~2,279)", len(master))
+    assert master["SiteID"].nunique() == len(master), "Duplicate SiteIDs after join"
+
+    # Conditioned_Area may be in site_detail or usage; resolve
+    if "Conditioned_Area" not in master.columns:
+        logger.warning("Conditioned_Area not found in SiteDetail — EUI cannot be computed.")
+        master["Site_EUI_kBtu_sqft"] = None
+        master["Electric_EUI_kBtu_sqft"] = None
+        return master
+
+    master["Conditioned_Area"] = pd.to_numeric(master["Conditioned_Area"], errors="coerce")
+
+    if "Annual Usage Total (kBtu)" in master.columns:
+        master["Site_EUI_kBtu_sqft"] = (
+            pd.to_numeric(master["Annual Usage Total (kBtu)"], errors="coerce")
+            / master["Conditioned_Area"]
+        )
+    else:
+        master["Site_EUI_kBtu_sqft"] = None
+
+    if "Annual Electric Usage (kBtu)" in master.columns:
+        master["Electric_EUI_kBtu_sqft"] = (
+            pd.to_numeric(master["Annual Electric Usage (kBtu)"], errors="coerce")
+            / master["Conditioned_Area"]
+        )
+    else:
+        master["Electric_EUI_kBtu_sqft"] = None
+
+    return master
+
+
+# ---------------------------------------------------------------------------
+# Reporting helpers
+# ---------------------------------------------------------------------------
+
+def _section(title: str) -> None:
+    print(f"\n{'=' * 70}")
+    print(f"  {title}")
+    print("=" * 70)
+
+
+def _report_master(master: pd.DataFrame) -> None:
+    _section("Prompt 1 — Master table summary")
+    print(f"  Total rows  : {len(master)}")
+    print(f"  Columns     : {len(master.columns)}")
+
+    bt_col = next((c for c in ["Building_Type", "Building Type"] if c in master.columns), None)
+    if bt_col:
+        print(f"\n  Building_Type breakdown:")
+        print(master[bt_col].value_counts(dropna=False).to_string())
+
+    key_cols = [
+        "Conditioned_Area",
+        "Annual Usage Total (kBtu)",
+        "Annual Electric Usage (kBtu)",
+        "Annual Gas Usage (kBtu)",
+        "Site_EUI_kBtu_sqft",
+        "Electric_EUI_kBtu_sqft",
+        "Primary_Heating_System_Type",
+        "Primary_Cooling_System_Type",
+        "Primary_Heating_Fuel_Type",
+    ]
+    print("\n  Non-null counts for key columns:")
+    for c in key_cols:
+        if c in master.columns:
+            nn = master[c].notna().sum()
+            print(f"    {c:<45s}: {nn:>5d} / {len(master)}")
+
+
+def _report_hvac_classification(master: pd.DataFrame) -> None:
+    _section("Prompt 2 — Site-level HVAC classification")
+    bt_col = next((c for c in ["Building_Type", "Building Type"] if c in master.columns), None)
+
+    for cls_col in ["heating_system_type", "cooling_system_type"]:
+        if cls_col not in master.columns:
+            continue
+        print(f"\n  {cls_col}:")
+        if bt_col:
+            print(master.groupby(bt_col)[cls_col].value_counts(dropna=False).to_string())
+        else:
+            print(master[cls_col].value_counts(dropna=False).to_string())
+
+
+def _report_dhw_classification(master: pd.DataFrame) -> None:
+    _section("Prompt 3 — Site-level DHW classification")
+    bt_col = next((c for c in ["Building_Type", "Building Type"] if c in master.columns), None)
+
+    if "dhw_system_type" not in master.columns:
+        print("  dhw_system_type column not found.")
+        return
+
+    print("\n  dhw_system_type:")
+    if bt_col:
+        print(master.groupby(bt_col)["dhw_system_type"].value_counts(dropna=False).to_string())
+    else:
+        print(master["dhw_system_type"].value_counts(dropna=False).to_string())
+
+
+def _report_mf_buildings(mf_bldg: pd.DataFrame) -> None:
+    _section("Prompt 4 — MF building-level HVAC/DHW classification")
+    print(f"  Total MF buildings: {len(mf_bldg)}")
+
+    for col in ["hvac_system_type", "dhw_system_type"]:
+        if col in mf_bldg.columns:
+            print(f"\n  {col}:")
+            print(mf_bldg[col].value_counts(dropna=False).to_string())
+
+    if "hvac_system_type" in mf_bldg.columns and "dhw_system_type" in mf_bldg.columns:
+        print("\n  Cross-tab: hvac_system_type × dhw_system_type")
+        xtab = pd.crosstab(
+            mf_bldg["hvac_system_type"],
+            mf_bldg["dhw_system_type"],
+            margins=True,
+            margins_name="Total",
+        )
+        print(xtab.to_string())
+        print(
+            "\n  Note: MF building records have no direct energy link to Usage_One_Line.csv."
+            " System-type distribution only — no EUI comparison available."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--zip", type=Path, default=None, help="Path to RBSA zip file.")
-    ap.add_argument("--data-dir", type=Path, default=None, help="Directory containing extracted RBSA CSVs.")
+    ap = argparse.ArgumentParser(description="Build RBSA curated tables (Prompts 1–4).")
+    src = ap.add_mutually_exclusive_group(required=True)
+    src.add_argument("--zip", type=Path, default=None, help="Path to RBSA zip file.")
+    src.add_argument("--data-dir", type=Path, default=None, help="Directory containing extracted RBSA CSVs.")
     ap.add_argument("--outdir", type=Path, required=True, help="Output folder (e.g., outputs/rbsa).")
-    ap.add_argument("--include-all-sites", action="store_true", help="Do not filter to multifamily; keep all.")
     args = ap.parse_args()
-
-    if (args.zip is None) == (args.data_dir is None):
-        raise SystemExit("Provide exactly one of --zip or --data-dir")
 
     args.outdir.mkdir(parents=True, exist_ok=True)
 
+    # ------------------------------------------------------------------
+    # Load all RBSA files
+    # ------------------------------------------------------------------
+    logger.info("Loading RBSA data from %s", args.zip or args.data_dir)
     inputs = load_rbsa_from_zip(args.zip) if args.zip else load_rbsa_from_dir(args.data_dir)
+    logger.info(
+        "Loaded — SiteDetail: %d | Usage: %d | MechOL: %d | MechHC: %d | MechWH: %d"
+        " | MF_Site: %d | MF_HVAC: %d | MF_DHW: %d",
+        len(inputs.site_detail), len(inputs.usage_one_line), len(inputs.mech_one_line),
+        len(inputs.mech_hc), len(inputs.mech_wh),
+        len(inputs.mf_site_detail), len(inputs.mf_hvac), len(inputs.mf_dhw),
+    )
 
-    site = inputs.site_detail.copy()
-    usage = inputs.usage_one_line.copy()
-    hvac = inputs.mf_hvac.copy()
-    dhw = inputs.mf_dhw.copy()
+    # ------------------------------------------------------------------
+    # Prompts 1–3: site-level master table
+    # ------------------------------------------------------------------
+    master = _build_site_master(inputs)
+    master = add_site_classifications(master, inputs.mech_wh)
 
-    mf_mask = pd.Series([True] * len(site), index=site.index) if args.include_all_sites else detect_multifamily(site)
-    site_mf = site.loc[mf_mask].copy()
+    _report_master(master)
+    _report_hvac_classification(master)
+    _report_dhw_classification(master)
 
-    logger.info("SiteDetail: %d rows total; keeping %d rows", len(site), len(site_mf))
+    # ------------------------------------------------------------------
+    # Prompt 4: MF building-level classification
+    # ------------------------------------------------------------------
+    mf_bldg = add_mf_building_classifications(inputs.mf_hvac, inputs.mf_dhw)
 
-    # Classify systems (Building_ID level)
-    hvac_cls = hvac[["Building_ID"]].copy()
-    hvac_cls["hvac_system_type"] = hvac.apply(lambda r: classify_hvac(r).label, axis=1)
-    hvac_cls["hvac_reason"] = hvac.apply(lambda r: classify_hvac(r).reason, axis=1)
-    hvac_cls = hvac_cls.drop_duplicates("Building_ID")
+    # Enrich with MF_Building_Site_Detail (floors, units, area, vintage)
+    mf_bldg = inputs.mf_site_detail.merge(mf_bldg, on="Building_ID", how="left")
 
-    dhw_cls = dhw[["Building_ID"]].copy()
-    dhw_cls["dhw_system_type"] = dhw.apply(lambda r: classify_dhw(r).label, axis=1)
-    dhw_cls["dhw_reason"] = dhw.apply(lambda r: classify_dhw(r).reason, axis=1)
-    dhw_cls = dhw_cls.drop_duplicates("Building_ID")
+    _report_mf_buildings(mf_bldg)
 
-    curated = site_mf[["SiteID", "Building_ID"]].merge(hvac_cls, on="Building_ID", how="left")
-    curated = curated.merge(dhw_cls, on="Building_ID", how="left")
-    curated = curated.merge(usage, on="SiteID", how="left")
-
-    logger.info("Curated rows: %d", len(curated))
-    if "hvac_system_type" in curated.columns:
-        logger.info("HVAC types:\\n%s", curated["hvac_system_type"].value_counts(dropna=False))
-    if "dhw_system_type" in curated.columns:
-        logger.info("DHW types:\\n%s", curated["dhw_system_type"].value_counts(dropna=False))
-
+    # ------------------------------------------------------------------
+    # Write outputs
+    # ------------------------------------------------------------------
     ts = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_base = args.outdir / f"rbsa_mf_curated_{ts}"
-    curated.to_parquet(out_base.with_suffix(".parquet"), index=False)
-    curated.to_csv(out_base.with_suffix(".csv"), index=False)
-    logger.info("Wrote %s.(parquet,csv)", out_base)
+
+    site_base = args.outdir / f"rbsa_site_master_{ts}"
+    master.to_parquet(site_base.with_suffix(".parquet"), index=False)
+    master.to_csv(site_base.with_suffix(".csv"), index=False)
+    logger.info("Wrote site master → %s.(parquet,csv)", site_base)
+
+    mf_base = args.outdir / f"rbsa_mf_buildings_{ts}"
+    mf_bldg.to_parquet(mf_base.with_suffix(".parquet"), index=False)
+    mf_bldg.to_csv(mf_base.with_suffix(".csv"), index=False)
+    logger.info("Wrote MF buildings → %s.(parquet,csv)", mf_base)
+
+    print(f"\n  Site master   : {site_base}.parquet / .csv")
+    print(f"  MF buildings  : {mf_base}.parquet / .csv")
+
 
 if __name__ == "__main__":
     main()
