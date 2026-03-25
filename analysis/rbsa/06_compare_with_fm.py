@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import numpy as np
 import pandas as pd
@@ -153,10 +155,18 @@ def _eui_summary_row(
 # ---------------------------------------------------------------------------
 
 
-def rbsa_summaries(site_master_path: Path) -> dict[str, pd.DataFrame]:
+def rbsa_summaries(site_master_path: Path, building_type: str = "mf") -> dict[str, pd.DataFrame]:
     """Load RBSA site master and compute per-system summaries."""
     df = _load_site_master(site_master_path)
     logger.info("RBSA site master: %d rows", len(df))
+
+    bt_col = next((c for c in ["Building_Type", "Building Type"] if c in df.columns), None)
+    if building_type == "sf" and bt_col:
+        df = df[df[bt_col].str.lower().str.contains("single", na=False)].copy()
+        logger.info("SF-only filter: %d rows", len(df))
+    elif building_type == "mf" and bt_col:
+        df = df[df[bt_col].str.lower().str.contains("multi", na=False)].copy()
+        logger.info("MF-only filter: %d rows", len(df))
 
     eui_col = "Site_EUI_kBtu_sqft"
     if eui_col not in df.columns or not df[eui_col].notna().any():
@@ -275,11 +285,13 @@ def main() -> None:
                     help="Path to 2023_Multifamily_Survey_dataset_FINAL.xlsx")
     ap.add_argument("--outdir", type=Path, default=Path("outputs/rbsa"),
                     help="Directory for output files.")
+    ap.add_argument("--building-type", choices=["mf", "sf", "all"], default="mf",
+                    help="Building type filter: 'mf' = multifamily only (default), 'sf' = single-family only, 'all' = no filter.")
     args = ap.parse_args()
 
     args.outdir.mkdir(parents=True, exist_ok=True)
 
-    rbsa = rbsa_summaries(args.site_master)
+    rbsa = rbsa_summaries(args.site_master, building_type=args.building_type)
 
     try:
         fm = fm_summaries(args.fm_data)

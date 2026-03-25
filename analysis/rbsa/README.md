@@ -30,27 +30,28 @@ python analysis/rbsa/00_sanity_checks.py \
     --table-type mf_buildings
 
 # Steps 2–5: Analysis (all take --site-master from step 1)
+# --building-type: 'mf' = multifamily only (default), 'sf' = single-family only, 'all' = no filter
 python analysis/rbsa/02_exploratory_distributions.py \
     --site-master outputs/rbsa/rbsa_site_master_*.parquet \
-    --outdir outputs/rbsa --sf-only
+    --outdir outputs/rbsa --building-type mf
 
 python analysis/rbsa/03_statistical_testing.py \
     --site-master outputs/rbsa/rbsa_site_master_*.parquet \
-    --outdir outputs/rbsa --sf-only
+    --outdir outputs/rbsa --building-type mf
 
 python analysis/rbsa/04_climate_vintage_controlled.py \
     --site-master outputs/rbsa/rbsa_site_master_*.parquet \
-    --outdir outputs/rbsa --sf-only
+    --outdir outputs/rbsa --building-type mf
 
 python analysis/rbsa/05_fuel_breakdown.py \
     --site-master outputs/rbsa/rbsa_site_master_*.parquet \
-    --outdir outputs/rbsa
+    --outdir outputs/rbsa --building-type mf
 
 # Step 6: Cross-dataset comparison
 python analysis/rbsa/06_compare_with_fm.py \
     --site-master outputs/rbsa/rbsa_site_master_*.parquet \
     --fm-data path/to/2023_Multifamily_Survey_dataset_FINAL.xlsx \
-    --outdir outputs/rbsa
+    --outdir outputs/rbsa --building-type mf
 ```
 
 ## Edit system classification rules in

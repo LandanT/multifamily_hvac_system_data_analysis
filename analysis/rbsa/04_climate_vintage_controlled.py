@@ -27,6 +27,8 @@ from __future__ import annotations
 import argparse
 import warnings
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import matplotlib
 matplotlib.use("Agg")
@@ -211,8 +213,12 @@ def main() -> None:
                     help="Path to rbsa_site_master_*.parquet (or .csv)")
     ap.add_argument("--outdir", type=Path, default=Path("outputs/rbsa"),
                     help="Directory for output files.")
-    ap.add_argument("--sf-only", action="store_true",
-                    help="Restrict to Single Family sites.")
+    ap.add_argument(
+        "--building-type",
+        choices=["mf", "sf", "all"],
+        default="mf",
+        help="Building type filter: 'mf' = multifamily only (default), 'sf' = single-family only, 'all' = no filter.",
+    )
     args = ap.parse_args()
 
     args.outdir.mkdir(parents=True, exist_ok=True)
@@ -221,9 +227,12 @@ def main() -> None:
     df = _load_site_master(args.site_master)
 
     bt_col = next((c for c in ["Building_Type", "Building Type"] if c in df.columns), None)
-    if args.sf_only and bt_col:
+    if args.building_type == "sf" and bt_col:
         df = df[df[bt_col].str.lower().str.contains("single", na=False)].copy()
         logger.info("SF-only filter: %d rows", len(df))
+    elif args.building_type == "mf" and bt_col:
+        df = df[df[bt_col].str.lower().str.contains("multi", na=False)].copy()
+        logger.info("MF-only filter: %d rows", len(df))
 
     all_ols = []
     all_zone = []

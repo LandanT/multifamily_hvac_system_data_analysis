@@ -8,7 +8,8 @@ Implements:
 
 Outputs (written to --outdir):
   rbsa_site_master.{parquet,csv}    — all sites with system classifications and EUI
-  rbsa_mf_buildings.{parquet,csv}  — MF building-level HVAC/DHW classifications
+  rbsa_mf_buildings.{parquet,csv}  — MF building-level HVAC/DHW classifications and EUI
+                                      (EUI joined via Building_ID → SiteID bridge in SiteDetail)
 
 Usage::
 
@@ -26,13 +27,20 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import datetime as dt
 
 import pandas as pd
 
 from src.common.log import get_logger
 from src.datasets.rbsa.ingest import load_rbsa_from_zip, load_rbsa_from_dir
-from src.datasets.rbsa.classify import add_site_classifications, add_mf_building_classifications
+from src.datasets.rbsa.classify import (
+    add_site_classifications,
+    add_mf_building_classifications,
+    classify_site_heating,
+    classify_site_cooling,
+)
 
 logger = get_logger("rbsa.build")
 
@@ -184,6 +192,11 @@ def _report_dhw_classification(master: pd.DataFrame) -> None:
 def _report_mf_buildings(mf_bldg: pd.DataFrame) -> None:
     _section("Prompt 4 — MF building-level HVAC/DHW classification")
     print(f"  Total MF buildings: {len(mf_bldg)}")
+    if "n_sites" in mf_bldg.columns:
+        print(f"  Surveyed units linked: {mf_bldg['n_sites'].sum():.0f}")
+    if "hvac_source" in mf_bldg.columns:
+        print(f"\n  Classification source:")
+        print(mf_bldg["hvac_source"].value_counts(dropna=False).to_string())
 
     for col in ["hvac_system_type", "dhw_system_type"]:
         if col in mf_bldg.columns:
@@ -199,10 +212,137 @@ def _report_mf_buildings(mf_bldg: pd.DataFrame) -> None:
             margins_name="Total",
         )
         print(xtab.to_string())
-        print(
-            "\n  Note: MF building records have no direct energy link to Usage_One_Line.csv."
-            " System-type distribution only — no EUI comparison available."
-        )
+
+    eui_cols = ["Site_EUI_kBtu_sqft", "Electric_EUI_kBtu_sqft"]
+    present_eui = [c for c in eui_cols if c in mf_bldg.columns]
+    if present_eui:
+        print("\n  Median EUI by hvac_system_type (building-level medians):")
+        if "hvac_system_type" in mf_bldg.columns:
+            print(mf_bldg.groupby("hvac_system_type")[present_eui].median().round(1).to_string())
+        else:
+            print(mf_bldg[present_eui].describe().round(1).to_string())
+
+
+# ---------------------------------------------------------------------------
+# Step 4 extension: Enrich MF buildings with energy data
+# ---------------------------------------------------------------------------
+
+_MF_ENERGY_COLS = [
+    "Site_EUI_kBtu_sqft",
+    "Electric_EUI_kBtu_sqft",
+    "Annual Usage Total (kBtu)",
+    "Annual Electric Usage (kBtu)",
+    "Annual Gas Usage (kBtu)",
+]
+
+
+def _enrich_mf_with_energy(
+    mf_bldg: pd.DataFrame,
+    site_detail: pd.DataFrame,
+    master: pd.DataFrame,
+) -> pd.DataFrame:
+    """Join MF building records to energy data via Building_ID → SiteID bridge.
+
+    SiteDetail contains both Building_ID and SiteID. MF buildings (keyed on
+    Building_ID) can be linked to Usage_One_Line energy data (keyed on SiteID)
+    through this bridge. One Building_ID may map to multiple surveyed SiteIDs;
+    energy metrics are aggregated to building level using the median.
+    """
+    if "Building_ID" not in site_detail.columns or "SiteID" not in site_detail.columns:
+        logger.warning("SiteDetail missing Building_ID or SiteID — skipping energy enrichment.")
+        return mf_bldg
+
+    # Bridge: Building_ID → SiteID (MF rows only — exclude null/string "NA")
+    bridge = site_detail[["Building_ID", "SiteID"]].copy()
+    bridge = bridge[bridge["Building_ID"].notna() & (bridge["Building_ID"] != "NA")]
+
+    # Pull available energy columns from master
+    energy_cols = ["SiteID"] + [c for c in _MF_ENERGY_COLS if c in master.columns]
+    energy = master[energy_cols].copy()
+    for col in energy_cols[1:]:
+        energy[col] = pd.to_numeric(energy[col], errors="coerce")
+
+    bridge_energy = bridge.merge(energy, on="SiteID", how="left")
+
+    # Aggregate to building level: median for energy, count for n_sites
+    numeric_cols = [c for c in _MF_ENERGY_COLS if c in bridge_energy.columns]
+    agg_dict: dict = {c: "median" for c in numeric_cols}
+    agg_dict["SiteID"] = "count"
+    bldg_energy = bridge_energy.groupby("Building_ID").agg(agg_dict).reset_index()
+    bldg_energy = bldg_energy.rename(columns={"SiteID": "n_sites"})
+
+    result = mf_bldg.merge(bldg_energy, on="Building_ID", how="left")
+    n_with_eui = result["Site_EUI_kBtu_sqft"].notna().sum() if "Site_EUI_kBtu_sqft" in result.columns else 0
+    logger.info("MF energy enrichment: %d buildings, EUI available for %d", len(result), n_with_eui)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Site-level fallback for MF buildings where MF questionnaire gave "unknown"
+# ---------------------------------------------------------------------------
+
+def _apply_site_fallback(
+    mf_bldg: pd.DataFrame,
+    master: pd.DataFrame,
+    site_detail: pd.DataFrame,
+) -> pd.DataFrame:
+    """For MF buildings where hvac/dhw classification is 'unknown', fall back to
+    site-level Mechanical_One_Line classification via Building_ID -> SiteID bridge.
+
+    Adds an 'hvac_source' column: 'mf_questionnaire' or 'site_mechanical_fallback'.
+    When a building has multiple SiteIDs, takes the modal (most common) site
+    classification across its units.
+    """
+    df = mf_bldg.copy()
+    df["hvac_source"] = "mf_questionnaire"
+
+    if "Building_ID" not in site_detail.columns or "SiteID" not in site_detail.columns:
+        logger.warning("SiteDetail missing Building_ID or SiteID — skipping fallback.")
+        return df
+
+    # Build Building_ID -> site classifications (mode per building)
+    site_cls_cols = ["SiteID", "heating_system_type", "cooling_system_type", "dhw_system_type"]
+    site_cls_cols = [c for c in site_cls_cols if c in master.columns]
+    if len(site_cls_cols) < 2:
+        return df
+
+    bridge = site_detail[["Building_ID", "SiteID"]].copy()
+    bridge = bridge[bridge["Building_ID"].notna() & (bridge["Building_ID"] != "NA")]
+    site_cls = master[site_cls_cols].copy()
+    bridge_cls = bridge.merge(site_cls, on="SiteID", how="left")
+
+    # Take modal classification per building
+    agg = {}
+    for col in ["heating_system_type", "cooling_system_type", "dhw_system_type"]:
+        if col in bridge_cls.columns:
+            agg[col] = lambda x: x.mode().iloc[0] if len(x.mode()) else "Unknown"
+    bldg_site_cls = bridge_cls.groupby("Building_ID").agg(agg).reset_index()
+    bldg_site_cls = bldg_site_cls.rename(columns={
+        "heating_system_type": "_site_heating",
+        "cooling_system_type": "_site_cooling",
+        "dhw_system_type": "_site_dhw",
+    })
+
+    df = df.merge(bldg_site_cls, on="Building_ID", how="left")
+
+    # Apply fallback for each unknown column
+    for mf_col, site_col in [
+        ("hvac_system_type", "_site_heating"),
+        ("dhw_system_type", "_site_dhw"),
+    ]:
+        if mf_col not in df.columns or site_col not in df.columns:
+            continue
+        unknown_mask = df[mf_col] == "unknown"
+        if unknown_mask.any():
+            df.loc[unknown_mask, mf_col] = df.loc[unknown_mask, site_col].fillna("unknown")
+            df.loc[unknown_mask, "hvac_source"] = "site_mechanical_fallback"
+
+    drop_cols = [c for c in ["_site_heating", "_site_cooling", "_site_dhw"] if c in df.columns]
+    df = df.drop(columns=drop_cols)
+
+    n_fallback = (df["hvac_source"] == "site_mechanical_fallback").sum()
+    logger.info("Site-level fallback applied to %d / %d MF buildings", n_fallback, len(df))
+    return df
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +389,12 @@ def main() -> None:
 
     # Enrich with MF_Building_Site_Detail (floors, units, area, vintage)
     mf_bldg = inputs.mf_site_detail.merge(mf_bldg, on="Building_ID", how="left")
+
+    # Enrich with energy data via Building_ID → SiteID bridge in SiteDetail
+    mf_bldg = _enrich_mf_with_energy(mf_bldg, inputs.site_detail, master)
+
+    # Fall back to site-level Mechanical_One_Line classification for unknowns
+    mf_bldg = _apply_site_fallback(mf_bldg, master, inputs.site_detail)
 
     _report_mf_buildings(mf_bldg)
 

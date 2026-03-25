@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import matplotlib
 matplotlib.use("Agg")
@@ -180,8 +182,12 @@ def main() -> None:
                     help="Path to rbsa_site_master_*.parquet (or .csv) from 01_build_curated_mf_table.py")
     ap.add_argument("--outdir", type=Path, default=Path("outputs/rbsa"),
                     help="Directory for output figures and CSVs.")
-    ap.add_argument("--sf-only", action="store_true",
-                    help="Restrict EUI analysis to Single Family sites (Prompt 5 default).")
+    ap.add_argument(
+        "--building-type",
+        choices=["mf", "sf", "all"],
+        default="mf",
+        help="Building type filter: 'mf' = multifamily only (default), 'sf' = single-family only, 'all' = no filter.",
+    )
     args = ap.parse_args()
 
     args.outdir.mkdir(parents=True, exist_ok=True)
@@ -191,10 +197,12 @@ def main() -> None:
     logger.info("Loaded %d rows", len(df))
 
     bt = _bt_col(df)
-    if args.sf_only and bt:
-        sf_mask = df[bt].str.lower().str.contains("single", na=False)
-        df = df[sf_mask].copy()
+    if args.building_type == "sf" and bt:
+        df = df[df[bt].str.lower().str.contains("single", na=False)].copy()
         logger.info("SF-only filter: %d rows", len(df))
+    elif args.building_type == "mf" and bt:
+        df = df[df[bt].str.lower().str.contains("multi", na=False)].copy()
+        logger.info("MF-only filter: %d rows", len(df))
 
     # Filter to rows with at least one EUI value
     has_eui = df[EUI_COLS].notna().any(axis=1)

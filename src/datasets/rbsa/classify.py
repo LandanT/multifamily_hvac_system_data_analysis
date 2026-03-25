@@ -12,12 +12,32 @@ Two separate classification layers are provided:
 2. **MF building-level** (from MF_Building_HVAC.csv / MF_Building_WaterHeating.csv):
    - ``classify_hvac(row)``  → SystemClassification (central|distributed|mixed|unknown)
    - ``classify_dhw(row)``   → SystemClassification (central|distributed|mixed|unknown)
+
+MF classification logic
+-----------------------
+The MF questionnaire captures Yes/No flags for equipment observed in common areas
+and in tenant units, plus surveyor hints ("Likely the Same"). Classification uses an
+equipment-aware approach rather than treating all COMMON/TENANT columns equally:
+
+- **"Likely the Same" = Yes**: surveyor confirmed a single system serves both common
+  and tenant spaces → Central (strongest signal, checked first).
+- **Definitive central equipment** (COMMON columns implying building-wide service):
+  boilers, central AC/HP, WSHP loop, cooling tower, AHU/RTU.
+- **Common-area-only equipment** (COMMON corridors/lobby heaters that do NOT imply
+  tenant central service): baseboard, wall heater, unit heater, fireplace, PTAC/PTHP.
+- **Definitive distributed equipment** (TENANT columns implying per-unit systems):
+  baseboard, PTAC/PTHP, furnace, mini-split, through-wall, window/portable units.
+- **DHW top-level flags**: ``Common Areas Have Hot Water`` and
+  ``Tenant Units Have Water Heating Equipment`` resolve buildings where no specific
+  equipment type was recorded.  Common=Yes + Tenant=No → Central;
+  Common=Yes + Tenant=Yes → Mixed.
+- If the MF questionnaire yields "unknown", callers may fall back to the site-level
+  classification from Mechanical_One_Line.csv via the Building_ID → SiteID bridge.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Optional, Tuple
 
 import pandas as pd
 
@@ -184,7 +204,7 @@ def add_site_classifications(master_df: pd.DataFrame, wh_df: pd.DataFrame) -> pd
 
 
 # ---------------------------------------------------------------------------
-# MF building-level classification helpers
+# MF building-level classification
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -193,81 +213,175 @@ class SystemClassification:
     reason: str
 
 
-def _truthy(v) -> bool:
+def _is_yes(v) -> bool:
+    """Return True only for explicit affirmative values (Yes/1/True). Unknown → False."""
     if v is None:
         return False
     if isinstance(v, (int, float)) and pd.isna(v):
         return False
-    s = str(v).strip().lower()
-    if s in ("1", "y", "yes", "true", "t"):
-        return True
-    if s in ("0", "n", "no", "false", "f", "", "nan", "none"):
-        return False
-    try:
-        return float(s) != 0.0
-    except Exception:
-        return True
+    return str(v).strip().lower() in ("1", "y", "yes", "true", "t")
 
 
-def evidence_from_prefix(row: pd.Series, prefixes: Iterable[str]) -> Tuple[bool, list[str]]:
-    cols = []
-    for c in row.index:
-        cu = c.upper()
-        if any(cu.startswith(p) for p in prefixes):
-            if _truthy(row[c]):
-                cols.append(c)
-    return (len(cols) > 0, cols)
+# HVAC equipment columns that indicate a building-wide central plant
+# (common-area equipment that distributes conditioning to tenant units)
+_HVAC_CENTRAL_COLS: tuple[str, ...] = (
+    "COMMON Boiler",
+    "COMMON Central AC",
+    "COMMON Central Air Source Heat Pump",
+    "COMMON Water Source Heat Pump",
+    "COMMON Tower",
+    "COMMON AHU/RTU Heating",
+    "COMMON AHU/RTU Cooling",
+    "COMMON MAU",
+)
+
+# HVAC equipment columns that indicate per-unit distributed systems in tenant spaces
+_HVAC_DISTRIBUTED_COLS: tuple[str, ...] = (
+    "TENANT Baseboard",
+    "TENANT Wall Heater",
+    "TENANT Unit Heater",
+    "TENANT PTAC Packaged Terminal Air Conditioner",
+    "TENANT PTHP Packaged Terminal Heat Pump",
+    "TENANT Furnace",
+    "TENANT Ductless Mini-split Heat Pump",
+    "TENANT Through-Wall AC",
+    "TENANT Through-Wall HP",
+    "TENANT Window AC",
+    "TENANT Portable AC",
+    "TENANT Portable Electric Heater",
+    "TENANT Portable Fossil Fuel Heater",
+    "TENANT Portable Heat Pump",
+    "TENANT Central AC",
+    "TENANT Central Air Source Heat Pump",
+    "TENANT AHU/RTU Cooling",
+    "TENANT Boiler",
+    "TENANT Water Source Heat Pump",
+)
+
+# DHW equipment columns that indicate a building-wide central DHW plant
+_DHW_CENTRAL_COLS: tuple[str, ...] = (
+    "COMMON Fossil Fuel Condensing Boiler",
+    "COMMON Fossil Fuel Non-Condensing Boiler",
+    "COMMON Electric Resistance Boiler",
+    "COMMON Fossil Fuel Condensing Storage",
+    "COMMON Fossil Fuel Non-Condensing Storage",
+    "COMMON Electric Resistance Storage",
+    "COMMON Fossil Fuel Condensing Instantaneous",
+    "COMMON Electric Resistance Instantaneous",
+    "COMMON Converter/Indirect Water Heater",
+)
+
+# DHW equipment columns that indicate per-unit distributed water heating
+_DHW_DISTRIBUTED_COLS: tuple[str, ...] = (
+    "TENANT Fossil Fuel Condensing Storage",
+    "TENANT Fossil Fuel Non-Condensing Storage",
+    "TENANT Electric Resistance Storage",
+    "TENANT Fossil Fuel Condensing Instantaneous",
+    "TENANT Electric Resistance Instantaneous",
+    "TENANT Converter/Indirect Water Heater",
+    "TENANT Fossil Fuel Condensing Boiler",
+    "TENANT Fossil Fuel Non-Condensing Boiler",
+    "TENANT Electric Resistance Boiler",
+)
 
 
-def classify_system_from_common_tenant(
-    row: pd.Series,
-    common_prefixes: Iterable[str],
-    tenant_prefixes: Iterable[str],
-    extra_hint_cols: Optional[Iterable[str]] = None,
-) -> SystemClassification:
-    common_has, common_cols = evidence_from_prefix(row, common_prefixes)
-    tenant_has, tenant_cols = evidence_from_prefix(row, tenant_prefixes)
-
-    hint_cols = []
-    if extra_hint_cols:
-        for hc in extra_hint_cols:
-            if hc in row.index and _truthy(row[hc]):
-                hint_cols.append(hc)
-
-    if common_has and tenant_has:
-        return SystemClassification("mixed", f"common({len(common_cols)})+tenant({len(tenant_cols)})")
-    if common_has and not tenant_has:
-        suffix = f"+hints({','.join(hint_cols)})" if hint_cols else ""
-        return SystemClassification("central", f"common({len(common_cols)}){suffix}")
-    if tenant_has and not common_has:
-        if hint_cols:
-            return SystemClassification("mixed", f"tenant({len(tenant_cols)})+hints({','.join(hint_cols)})")
-        return SystemClassification("distributed", f"tenant({len(tenant_cols)})")
-    if hint_cols:
-        return SystemClassification("central", f"hints({','.join(hint_cols)})")
-    return SystemClassification("unknown", "no evidence")
+def _check_cols(row: pd.Series, cols: tuple[str, ...]) -> list[str]:
+    """Return list of cols present in row that have explicit Yes values."""
+    return [c for c in cols if c in row.index and _is_yes(row[c])]
 
 
 def classify_hvac(row: pd.Series) -> SystemClassification:
-    """Classify MF building-level HVAC from MF_Building_HVAC.csv row."""
-    common_prefixes = ("COMMON", "COM ", "COMMON_")
-    tenant_prefixes = ("TENANT", "TEN ", "TENANT_")
-    hint_cols = (
-        "Common and Tenant Heating Likely the Same",
-        "Common and Tenant Cooling Likely the Same",
-    )
-    return classify_system_from_common_tenant(row, common_prefixes, tenant_prefixes, hint_cols)
+    """Classify MF building-level HVAC from a MF_Building_HVAC.csv row.
+
+    Decision order:
+    1. "Likely the Same" hint = Yes → Central (surveyor confirmed single system)
+    2. Definitive central equipment (boiler, central AC/HP, WSHP, tower, AHU/RTU)
+    3. Definitive distributed equipment (per-unit PTAC/baseboard/mini-split/etc.)
+    4. central-only → Central; distributed-only → Distributed; both → Mixed; neither → Unknown
+    """
+    # Step 1: Surveyor hint — "Likely the Same" = Yes is the strongest signal
+    heat_hint = str(row.get("Common and Tenant Heating Likely the Same", "")).strip().lower()
+    cool_hint = str(row.get("Common and Tenant Cooling Likely the Same", "")).strip().lower()
+    if heat_hint == "yes" or cool_hint == "yes":
+        hints = []
+        if heat_hint == "yes":
+            hints.append("heating_likely_same")
+        if cool_hint == "yes":
+            hints.append("cooling_likely_same")
+        return SystemClassification("central", f"hint:{','.join(hints)}")
+
+    # Step 2 & 3: Equipment evidence
+    central_evidence = _check_cols(row, _HVAC_CENTRAL_COLS)
+    distributed_evidence = _check_cols(row, _HVAC_DISTRIBUTED_COLS)
+
+    if central_evidence and not distributed_evidence:
+        return SystemClassification("central", f"equipment:{central_evidence[0]}")
+    if distributed_evidence and not central_evidence:
+        return SystemClassification("distributed", f"equipment:{distributed_evidence[0]}")
+    if central_evidence and distributed_evidence:
+        return SystemClassification("mixed", f"central:{central_evidence[0]}+distributed:{distributed_evidence[0]}")
+    return SystemClassification("unknown", "no definitive evidence")
 
 
 def classify_dhw(row: pd.Series) -> SystemClassification:
-    """Classify MF building-level DHW from MF_Building_WaterHeating.csv row."""
-    common_prefixes = ("COMMON", "COM ", "COMMON_")
-    tenant_prefixes = ("TENANT", "TEN ", "TENANT_")
-    hint_cols = (
+    """Classify MF building-level DHW from a MF_Building_WaterHeating.csv row.
+
+    Decision order:
+    1. "Likely the Same" hint = Yes → Central
+    2. "Tenant In-Unit Water Heater Included" = Yes → Distributed or Mixed
+    3. "Common Areas Have Hot Water" = Yes + "Tenant Units Have Water Heating Equipment" = No → Central
+    4. "Common Areas Have Hot Water" = Yes + "Tenant Units Have Water Heating Equipment" = Yes → Mixed
+       (check equipment first; fall back to mixed if no specific equipment found)
+    5. Definitive central DHW equipment (common boilers, storage, instantaneous)
+    6. Definitive distributed DHW equipment (tenant-unit water heaters)
+    7. central-only → Central; distributed-only → Distributed; both → Mixed; neither → Unknown
+    """
+    # Step 1: Surveyor hints
+    hints = (
         "Common and Tenant Water Heating Likely the Same",
         "Common and Tenant Water Heating the Same",
     )
-    return classify_system_from_common_tenant(row, common_prefixes, tenant_prefixes, hint_cols)
+    for hint_col in hints:
+        if str(row.get(hint_col, "")).strip().lower() == "yes":
+            return SystemClassification("central", f"hint:{hint_col}")
+
+    # Step 2: Explicit "in-unit water heater included" flag
+    if _is_yes(row.get("Tenant In-Unit Water Heater Included")):
+        distributed_evidence = _check_cols(row, _DHW_DISTRIBUTED_COLS)
+        central_evidence = _check_cols(row, _DHW_CENTRAL_COLS)
+        if central_evidence:
+            return SystemClassification("mixed", f"in-unit+central:{central_evidence[0]}")
+        return SystemClassification("distributed", "Tenant In-Unit Water Heater Included=Yes")
+
+    # Step 3 & 4: Top-level area flags
+    common_has_hw = _is_yes(row.get("Common Areas Have Hot Water"))
+    tenant_has_wh = _is_yes(row.get("Tenant Units Have Water Heating Equipment"))
+
+    if common_has_hw and not tenant_has_wh:
+        return SystemClassification("central", "Common Areas Have Hot Water=Yes, no tenant equipment")
+
+    if common_has_hw and tenant_has_wh:
+        central_evidence = _check_cols(row, _DHW_CENTRAL_COLS)
+        distributed_evidence = _check_cols(row, _DHW_DISTRIBUTED_COLS)
+        if central_evidence and distributed_evidence:
+            return SystemClassification("mixed", f"common_hw+tenant_wh:{central_evidence[0]}+{distributed_evidence[0]}")
+        if central_evidence:
+            return SystemClassification("mixed", f"common_hw+tenant_wh:central={central_evidence[0]}")
+        if distributed_evidence:
+            return SystemClassification("mixed", f"common_hw+tenant_wh:distributed={distributed_evidence[0]}")
+        return SystemClassification("mixed", "Common Areas Have Hot Water=Yes + Tenant Units Have Water Heating Equipment=Yes")
+
+    # Step 5 & 6: Equipment evidence
+    central_evidence = _check_cols(row, _DHW_CENTRAL_COLS)
+    distributed_evidence = _check_cols(row, _DHW_DISTRIBUTED_COLS)
+
+    if central_evidence and not distributed_evidence:
+        return SystemClassification("central", f"equipment:{central_evidence[0]}")
+    if distributed_evidence and not central_evidence:
+        return SystemClassification("distributed", f"equipment:{distributed_evidence[0]}")
+    if central_evidence and distributed_evidence:
+        return SystemClassification("mixed", f"central:{central_evidence[0]}+distributed:{distributed_evidence[0]}")
+    return SystemClassification("unknown", "no definitive evidence")
 
 
 def add_mf_building_classifications(

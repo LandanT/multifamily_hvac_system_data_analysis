@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import sys; print\\(''\\\\n''.join\\(sys.path\\)\\)\")",
+      "Bash(python -m pip install -e .)",
+      "Bash(for file:*)",
+      "Bash(do echo:*)",
+      "Read(//c/Users/ltaylor2/Documents/GitHub/multifamily_hvac_system_data_analysis/data/**)",
+      "Bash(done)",
+      "Bash(python 01_build_curated_mf_table.py --data-dir \"../../data/rbsa\" --outdir outputs/rbsa)",
+      "Bash(python -m pip install --upgrade numpy)",
+      "Bash(python3:*)",
+      "Bash(python analysis/rbsa/01_build_curated_mf_table.py --outdir outputs/rbsa)",
+      "Bash(python analysis/rbsa/01_build_curated_mf_table.py --data-dir \"c:\\\\Users\\\\ltaylor2\\\\Documents\\\\GitHub\\\\multifamily_hvac_system_data_analysis\\\\data\" --outdir outputs/rbsa)"
+    ]
+  }
+}
