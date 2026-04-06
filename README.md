@@ -41,6 +41,8 @@ tests/              # pytest tests (in progress)
 **Geography:** National multifamily portfolio
 **Key fields:** HVAC/DHW equipment type, site/source EUI, fuel breakdown, HDD/CDD, building size
 
+> **Note for future users:** The FM energy-analysis subset is thin (~40–107 classifiable properties per system type). Treat FM outputs as directional reference only; do not draw statistical conclusions from FM comparisons alone until a larger energy-data subset is available.
+
 **Source modules:**
 ```
 src/datasets/fm_mf_survey/

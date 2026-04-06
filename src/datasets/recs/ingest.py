@@ -171,6 +171,7 @@ def load_recs(
     df["DHW_EUI_kBtu_sqft"] = _eui("TOTALBTUWTH")
     df["Other_EUI_kBtu_sqft"] = _eui("TOTALBTUOTH")
     df["Electric_EUI_kBtu_sqft"] = _eui("BTUEL")
+    df["Gas_EUI_kBtu_sqft"] = _eui("BTUNG")
 
     # Fall back for TOTALBTU: sum fuel components if primary total is missing.
     if "TOTALBTU" in df.columns:

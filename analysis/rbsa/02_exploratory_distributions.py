@@ -36,7 +36,7 @@ from src.common.log import get_logger
 
 logger = get_logger("rbsa.02_explore")
 
-EUI_COLS = ["Site_EUI_kBtu_sqft", "Electric_EUI_kBtu_sqft"]
+EUI_COLS = ["Site_EUI_kBtu_sqft", "Electric_EUI_kBtu_sqft", "Gas_EUI_kBtu_sqft"]
 SYSTEM_COLS = ["heating_system_type", "cooling_system_type", "dhw_system_type"]
 
 
@@ -94,19 +94,17 @@ def make_boxplots(df: pd.DataFrame, system_col: str, eui_cols: list[str], outdir
         for i, grp in enumerate(groups_raw):
             n = len(data_by_group[grp])
             ax.text(
-                i + 1, ylim[0] - 0.03 * (ylim[1] - ylim[0]),
-                f"n={n}", ha="center", va="top", fontsize=8, color="dimgray",
+                i + 1, ylim[0] + 0.01 * (ylim[1] - ylim[0]),
+                f"n={n}", ha="center", va="bottom", fontsize=8, color="dimgray",
             )
-
-        ax.text(
-            0.5, 1.01,
-            "⚠ Interpret with caution — check sample sizes",
-            transform=ax.transAxes,
-            ha="center", fontsize=7, color="red",
-        )
 
     fig.suptitle(f"EUI Distribution by {system_col}", fontsize=12, fontweight="bold")
     fig.tight_layout()
+    fig.text(
+        0.5, 0.01,
+        "⚠ Interpret with caution — check sample sizes",
+        ha="center", fontsize=7, color="red",
+    )
 
     fname = outdir / f"02_boxplot_{system_col}.png"
     fig.savefig(fname, dpi=150, bbox_inches="tight")

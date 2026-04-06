@@ -172,14 +172,13 @@ def make_fuel_share_bar(
     ax.set_xticks(range(len(groups)))
     ax.set_xticklabels(groups, rotation=15, ha="right", fontsize=9)
     ax.legend(loc="upper right", fontsize=7, title="Fuel Type", bbox_to_anchor=(1.3, 1.0))
-    ax.text(
-        0.5, -0.12,
-        "⚠ Households may use more than one fuel type (flags are not mutually exclusive)",
-        transform=ax.transAxes,
-        ha="center", fontsize=7, color="gray",
-    )
 
     fig.tight_layout()
+    fig.text(
+        0.5, 0.01,
+        "⚠ Households may use more than one fuel type (flags are not mutually exclusive)",
+        ha="center", fontsize=7, color="gray",
+    )
     fig.savefig(fname, dpi=150, bbox_inches="tight")
     plt.close(fig)
     logger.info("Saved %s", fname)

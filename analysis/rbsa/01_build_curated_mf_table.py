@@ -99,6 +99,7 @@ def _build_site_master(inputs) -> pd.DataFrame:
         logger.warning("Conditioned_Area not found in SiteDetail — EUI cannot be computed.")
         master["Site_EUI_kBtu_sqft"] = None
         master["Electric_EUI_kBtu_sqft"] = None
+        master["Gas_EUI_kBtu_sqft"] = None
         return master
 
     master["Conditioned_Area"] = pd.to_numeric(master["Conditioned_Area"], errors="coerce")
@@ -118,6 +119,14 @@ def _build_site_master(inputs) -> pd.DataFrame:
         )
     else:
         master["Electric_EUI_kBtu_sqft"] = None
+
+    if "Annual Gas Usage (kBtu)" in master.columns:
+        master["Gas_EUI_kBtu_sqft"] = (
+            pd.to_numeric(master["Annual Gas Usage (kBtu)"], errors="coerce")
+            / master["Conditioned_Area"]
+        )
+    else:
+        master["Gas_EUI_kBtu_sqft"] = None
 
     return master
 
@@ -213,7 +222,7 @@ def _report_mf_buildings(mf_bldg: pd.DataFrame) -> None:
         )
         print(xtab.to_string())
 
-    eui_cols = ["Site_EUI_kBtu_sqft", "Electric_EUI_kBtu_sqft"]
+    eui_cols = ["Site_EUI_kBtu_sqft", "Electric_EUI_kBtu_sqft", "Gas_EUI_kBtu_sqft"]
     present_eui = [c for c in eui_cols if c in mf_bldg.columns]
     if present_eui:
         print("\n  Median EUI by hvac_system_type (building-level medians):")
@@ -230,6 +239,7 @@ def _report_mf_buildings(mf_bldg: pd.DataFrame) -> None:
 _MF_ENERGY_COLS = [
     "Site_EUI_kBtu_sqft",
     "Electric_EUI_kBtu_sqft",
+    "Gas_EUI_kBtu_sqft",
     "Annual Usage Total (kBtu)",
     "Annual Electric Usage (kBtu)",
     "Annual Gas Usage (kBtu)",
