@@ -99,6 +99,8 @@ def main() -> None:
     ap.add_argument("--skip-steps", nargs="*", metavar="STEP", default=[],
                     choices=STEPS,
                     help="Steps to skip, e.g. --skip-steps 01 06.")
+    ap.add_argument("--use-weights", action="store_true", default=False,
+                    help="Include NWEIGHT survey weights in step 04 OLS models.")
     ap.add_argument("--dry-run", action="store_true",
                     help="Print commands without executing them.")
 
@@ -140,6 +142,8 @@ def main() -> None:
                 "--outdir", str(args.outdir),
                 "--unit-type", args.unit_type,
             ]
+            if step == "04" and args.use_weights:
+                cmd.append("--use-weights")
 
         elif step == "06":
             curated = _find_curated(args.outdir)

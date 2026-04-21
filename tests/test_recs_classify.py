@@ -278,3 +278,58 @@ class TestAddSystemClassifications:
         assert result["heating_system_type_binary"].iloc[0] == "Central"
         assert result["cooling_system_type_binary"].iloc[0] == "Distributed"
         assert result["dhw_system_type_binary"].iloc[0] == "Distributed"
+
+
+# ---------------------------------------------------------------------------
+# Vectorized vs row-wise consistency
+# ---------------------------------------------------------------------------
+
+
+class TestVectorizedMatchesRowWise:
+    """Verify vectorized classifiers produce identical results to row-wise."""
+
+    @staticmethod
+    def _build_test_df() -> pd.DataFrame:
+        """Construct a DataFrame exercising every classification branch."""
+        rows = [
+            # Explicit Central / Distributed / Unknown for heating
+            {"HEATHOME": 1, "HEATAPT": 1, "EQUIPM": float("nan"),
+             "AIRCOND": 1, "COOLAPT": 1, "ACEQUIPM_PUB": float("nan"),
+             "H2OAPT": 1, "MORETHAN1H2O": 0},
+            {"HEATHOME": 1, "HEATAPT": 0, "EQUIPM": float("nan"),
+             "AIRCOND": 1, "COOLAPT": 0, "ACEQUIPM_PUB": float("nan"),
+             "H2OAPT": 0, "MORETHAN1H2O": 0},
+            {"HEATHOME": 0, "HEATAPT": float("nan"), "EQUIPM": float("nan"),
+             "AIRCOND": 0, "COOLAPT": float("nan"), "ACEQUIPM_PUB": float("nan"),
+             "H2OAPT": float("nan"), "MORETHAN1H2O": float("nan")},
+            # Inferred heating via EQUIPM
+            {"HEATHOME": 1, "HEATAPT": float("nan"), "EQUIPM": 13,
+             "AIRCOND": 1, "COOLAPT": float("nan"), "ACEQUIPM_PUB": 3,
+             "H2OAPT": float("nan"), "MORETHAN1H2O": 1},
+            {"HEATHOME": 1, "HEATAPT": float("nan"), "EQUIPM": 3,
+             "AIRCOND": 1, "COOLAPT": float("nan"), "ACEQUIPM_PUB": 1,
+             "H2OAPT": float("nan"), "MORETHAN1H2O": 0},
+            # Unknown equipment code
+            {"HEATHOME": 1, "HEATAPT": float("nan"), "EQUIPM": 99,
+             "AIRCOND": 1, "COOLAPT": float("nan"), "ACEQUIPM_PUB": 99,
+             "H2OAPT": float("nan"), "MORETHAN1H2O": float("nan")},
+        ]
+        return pd.DataFrame(rows)
+
+    def test_heating_matches(self):
+        df = self._build_test_df()
+        row_wise = df.apply(classify_heating, axis=1)
+        vectorized = add_system_classifications(df)["heating_system_type"]
+        pd.testing.assert_series_equal(row_wise, vectorized, check_names=False)
+
+    def test_cooling_matches(self):
+        df = self._build_test_df()
+        row_wise = df.apply(classify_cooling, axis=1)
+        vectorized = add_system_classifications(df)["cooling_system_type"]
+        pd.testing.assert_series_equal(row_wise, vectorized, check_names=False)
+
+    def test_dhw_matches(self):
+        df = self._build_test_df()
+        row_wise = df.apply(classify_dhw, axis=1)
+        vectorized = add_system_classifications(df)["dhw_system_type"]
+        pd.testing.assert_series_equal(row_wise, vectorized, check_names=False)

@@ -30,6 +30,7 @@ import pandas as pd
 from scipy import stats
 
 from src.common.log import get_logger
+from src.datasets.recs.utils import load_curated, filter_unit_type
 
 logger = get_logger("recs.03_stats")
 
@@ -50,29 +51,6 @@ BINARY_COLS = [
 
 # Fuel strata: None = all households; "electric" / "gas" = subset by fuel flag
 FUEL_STRATA = [None, "electric", "gas"]
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _load_curated(path: Path) -> pd.DataFrame:
-    return (
-        pd.read_parquet(path)
-        if path.suffix.lower() == ".parquet"
-        else pd.read_csv(path, low_memory=False)
-    )
-
-
-def _filter_unit_type(df: pd.DataFrame, unit_type: str) -> pd.DataFrame:
-    if "TYPEHUQ" not in df.columns or unit_type == "all":
-        return df
-    if unit_type == "mf":
-        return df[df["TYPEHUQ"].isin([3, 4])].copy()
-    if unit_type == "sf":
-        return df[df["TYPEHUQ"].isin([1, 2])].copy()
-    return df
 
 
 def rank_biserial(x: np.ndarray, y: np.ndarray) -> float:
@@ -150,8 +128,8 @@ def main() -> None:
     args = ap.parse_args()
 
     logger.info("Loading curated data from %s", args.curated)
-    df = _load_curated(args.curated)
-    df = _filter_unit_type(df, args.unit_type)
+    df = load_curated(args.curated)
+    df = filter_unit_type(df, args.unit_type)
     logger.info("Rows after unit-type filter (%s): %d", args.unit_type, len(df))
 
     results = []
@@ -223,6 +201,18 @@ def main() -> None:
             "system_col", "fuel_stratum", "metric", "n_central", "n_distributed",
             "U_statistic", "p_value", "rank_biserial_r", "significant",
         ]].to_string(index=False))
+
+        # Multiple-testing note
+        n_tests = len(result_df[result_df["p_value"].notna()])
+        if n_tests > 1:
+            bonferroni_alpha = round(ALPHA / n_tests, 4)
+            n_bonf_sig = int((result_df["p_value"].dropna() < bonferroni_alpha).sum())
+            print(
+                f"\n  ⚠ Multiple testing: {n_tests} tests performed at α={ALPHA}."
+                f"\n    Bonferroni-adjusted α = {bonferroni_alpha}"
+                f" → {n_bonf_sig} of {n_tests} remain significant after correction."
+            )
+            result_df["bonferroni_significant"] = result_df["p_value"] < bonferroni_alpha
 
     if args.outdir:
         args.outdir.mkdir(parents=True, exist_ok=True)

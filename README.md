@@ -22,11 +22,14 @@ src/
   datasets/
     fm_mf_survey/   # 2023 Fannie Mae Multifamily Survey  [implemented]
     rbsa/           # 2022 RBSA residential/multifamily   [implemented]
+    recs/           # 2020 RECS national household survey [implemented]
     cbecs/          # CBECS commercial                    [placeholder]
 analysis/
   fm_mf_survey/     # analysis scripts 01–06
   rbsa/             # analysis scripts 00–06
-tests/              # pytest tests (in progress)
+  recs/             # analysis scripts 01–08 + run_workflow.py
+tests/              # pytest suite (44 tests passing)
+FINDINGS.md         # living summary of cross-dataset results
 ```
 
 ---
@@ -97,22 +100,50 @@ See [`analysis/rbsa/README.md`](analysis/rbsa/README.md) for the full script seq
 
 ---
 
-### RECS (Residential Energy Consumption Survey)
+### RECS 2020 (Residential Energy Consumption Survey)
 
-> **Status: Planned**
+> **Status: Implemented**
 
-EIA's national household-level survey. Intended to extend the central vs. distributed HVAC/DHW analysis to a nationally representative residential sample.
+**Source:** EIA 2020 RECS microdata — national household-level survey
+**Geography:** National (all 50 states + DC)
+**Sample:** 2,764 multifamily households (TYPEHUQ 3–4)
+**Key fields:** HEATAPT (central flag), EQUIPM (equipment type), IECC climate zone, YEARMADERANGE, TOTSQFT_EN, NWEIGHT
 
-When implemented, it will follow the same pipeline pattern:
+**Source modules:**
 ```
 src/datasets/recs/
-    ingest.py    — (to be added)
-    classify.py  — (to be added)
-analysis/recs/
-    01_build_curated_table.py
-    02_exploratory_distributions.py
-    ...
+    ingest.py    — load RECS CSV, sentinel replacement, EUI computation
+    classify.py  — vectorized heating/cooling/DHW classifiers (Central/Distributed/Mixed/Unknown)
+    utils.py     — shared helpers (load_curated, filter_unit_type)
 ```
+
+**Quick start:**
+```bash
+pip install -e ".[dev]"
+
+# Build curated table
+python analysis/recs/01_build_curated_table.py \
+    --data data/recs/recs2020_public_v7.csv \
+    --outdir outputs/recs
+
+# Run full pipeline (steps 02–06)
+python analysis/recs/run_workflow.py \
+    --curated outputs/recs/recs2020_curated_*.parquet \
+    --outdir outputs/recs
+
+# Presentation plots
+python analysis/recs/07_presentation_plots.py
+
+# Cross-dataset comparison (RECS vs RBSA)
+python analysis/recs/08_cross_dataset_comparison.py \
+    --recs-ols outputs/recs/04_ols_results.csv \
+    --recs-mw  outputs/recs/03_mann_whitney_results.csv \
+    --rbsa-ols outputs/rbsa/04_ols_results.csv \
+    --rbsa-mw  outputs/rbsa/03_mann_whitney_results.csv \
+    --outdir   outputs/recs
+```
+
+See [`analysis/recs/README.md`](analysis/recs/README.md) for the full script sequence and classification rules.
 
 ---
 
@@ -122,9 +153,13 @@ analysis/recs/
 # Install with dev extras
 pip install -e ".[dev]"
 
+# Run tests
+pytest tests/ -v
+
 # Classification rules live here — edit to adjust system labels:
 src/datasets/fm_mf_survey/classify.py
 src/datasets/rbsa/classify.py
+src/datasets/recs/classify.py
 ```
 
 Raw data files are `.gitignore`d. Only code and analysis outputs are versioned.
@@ -134,6 +169,10 @@ Raw data files are `.gitignore`d. Only code and analysis outputs are versioned.
 ## Important caveats
 
 - **"Not Provided" ≠ NaN** — the FM survey uses both; both must be filtered.
-- **Do NOT merge datasets** — FM MF Survey, RBSA, and future RECS have different classification schemes, geographies, and survey vintages. Script 06 in each analysis folder does side-by-side comparison only.
+- **Do NOT merge datasets** — FM MF Survey, RBSA, and RECS have different classification schemes, geographies, and survey vintages. Script 06/08 does side-by-side comparison only.
 - **Non-parametric tests** — distributions are non-normal; use Mann-Whitney U, not t-tests.
-- **Small samples** — the FM energy-analysis subset yields ~40–107 classifiable properties per system type; all outputs label sample sizes.
+- **Small samples** — FM energy subset ~40–107 properties; RBSA has only 11–35 Central heating MF units. All outputs label sample sizes.
+- **Fuel confounding** — gas-heated distributed buildings can have *higher* EUI; always check fuel-stratified results alongside overall comparisons.
+- **Observational data** — no causal claims. System type is confounded with building age, size, fuel type, and income.
+
+See [`FINDINGS.md`](FINDINGS.md) for a living summary of cross-dataset results and interpretation.

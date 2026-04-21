@@ -409,8 +409,14 @@ def main() -> None:
     _report_mf_buildings(mf_bldg)
 
     # ------------------------------------------------------------------
-    # Write outputs
+    # Write outputs (clean stale timestamped files first)
     # ------------------------------------------------------------------
+    import glob as _glob
+    for pattern in ["rbsa_site_master_*", "rbsa_mf_buildings_*"]:
+        for old in _glob.glob(str(args.outdir / pattern)):
+            Path(old).unlink()
+            logger.info("Removed stale output: %s", old)
+
     ts = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
 
     site_base = args.outdir / f"rbsa_site_master_{ts}"

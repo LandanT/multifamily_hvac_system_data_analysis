@@ -32,35 +32,12 @@ import numpy as np
 import pandas as pd
 
 from src.common.log import get_logger
+from src.datasets.recs.utils import load_curated, filter_unit_type
 
 logger = get_logger("recs.02_explore")
 
 EUI_COLS = ["Site_EUI_kBtu_sqft", "Electric_EUI_kBtu_sqft", "Gas_EUI_kBtu_sqft"]
 SYSTEM_COLS = ["heating_system_type", "cooling_system_type", "dhw_system_type"]
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _load_curated(path: Path) -> pd.DataFrame:
-    return (
-        pd.read_parquet(path)
-        if path.suffix.lower() == ".parquet"
-        else pd.read_csv(path, low_memory=False)
-    )
-
-
-def _filter_unit_type(df: pd.DataFrame, unit_type: str) -> pd.DataFrame:
-    """Filter by TYPEHUQ if the column is present."""
-    if "TYPEHUQ" not in df.columns or unit_type == "all":
-        return df
-    if unit_type == "mf":
-        return df[df["TYPEHUQ"].isin([3, 4])].copy()
-    if unit_type == "sf":
-        return df[df["TYPEHUQ"].isin([1, 2])].copy()
-    return df
 
 
 def make_boxplots(df: pd.DataFrame, system_col: str, eui_cols: list[str], outdir: Path) -> None:
@@ -162,17 +139,24 @@ def print_summary_stats(df: pd.DataFrame, system_col: str, eui_cols: list[str]) 
     print(f"Summary stats — {system_col}")
     print(f"{'=' * 60}")
 
+    _SHORT = {
+        "Site_EUI_kBtu_sqft": "SiteEUI",
+        "Electric_EUI_kBtu_sqft": "ElecEUI",
+        "Gas_EUI_kBtu_sqft": "GasEUI",
+    }
+
     rows = []
     for grp, gdf in df.groupby(system_col):
         row = {"system_type": grp}
         for col in present:
             vals = gdf[col].dropna()
-            row[f"n_{col[:12]}"] = len(vals)
-            row[f"median_{col[:12]}"] = round(vals.median(), 1) if len(vals) else None
-            row[f"IQR_{col[:12]}"] = (
+            short = _SHORT.get(col, col)
+            row[f"n_{short}"] = len(vals)
+            row[f"median_{short}"] = round(vals.median(), 1) if len(vals) else None
+            row[f"IQR_{short}"] = (
                 round(vals.quantile(0.75) - vals.quantile(0.25), 1) if len(vals) else None
             )
-            row[f"mean_{col[:12]}"] = round(vals.mean(), 1) if len(vals) else None
+            row[f"mean_{short}"] = round(vals.mean(), 1) if len(vals) else None
         rows.append(row)
 
     summary = pd.DataFrame(rows).set_index("system_type")
@@ -208,10 +192,10 @@ def main() -> None:
     args.outdir.mkdir(parents=True, exist_ok=True)
 
     logger.info("Loading curated data from %s", args.curated)
-    df = _load_curated(args.curated)
+    df = load_curated(args.curated)
     logger.info("Loaded %d rows", len(df))
 
-    df = _filter_unit_type(df, args.unit_type)
+    df = filter_unit_type(df, args.unit_type)
     logger.info("After unit-type filter (%s): %d rows", args.unit_type, len(df))
 
     # Filter to rows with at least one EUI value

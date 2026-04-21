@@ -79,7 +79,7 @@ def make_boxplots(df: pd.DataFrame, system_col: str, eui_cols: list[str], outdir
         }
         plot_data = [data_by_group[g].values for g in groups_raw]
 
-        bp = ax.boxplot(plot_data, labels=groups_raw, patch_artist=True, notch=False)
+        bp = ax.boxplot(plot_data, tick_labels=groups_raw, patch_artist=True, notch=False)
         colors = plt.cm.Set2(np.linspace(0, 1, len(groups_raw)))
         for patch, color in zip(bp["boxes"], colors):
             patch.set_facecolor(color)

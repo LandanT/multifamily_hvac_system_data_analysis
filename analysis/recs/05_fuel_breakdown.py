@@ -36,6 +36,7 @@ import numpy as np
 import pandas as pd
 
 from src.common.log import get_logger
+from src.datasets.recs.utils import load_curated, filter_unit_type
 
 logger = get_logger("recs.05_fuel")
 
@@ -66,29 +67,6 @@ FUEL_COLORS = [
 ]
 
 SYSTEM_COLS = ["heating_system_type", "cooling_system_type", "dhw_system_type"]
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _load_curated(path: Path) -> pd.DataFrame:
-    return (
-        pd.read_parquet(path)
-        if path.suffix.lower() == ".parquet"
-        else pd.read_csv(path, low_memory=False)
-    )
-
-
-def _filter_unit_type(df: pd.DataFrame, unit_type: str) -> pd.DataFrame:
-    if "TYPEHUQ" not in df.columns or unit_type == "all":
-        return df
-    if unit_type == "mf":
-        return df[df["TYPEHUQ"].isin([3, 4])].copy()
-    if unit_type == "sf":
-        return df[df["TYPEHUQ"].isin([1, 2])].copy()
-    return df
 
 
 def fuel_share_table(
@@ -213,8 +191,8 @@ def main() -> None:
     args.outdir.mkdir(parents=True, exist_ok=True)
 
     logger.info("Loading curated data from %s", args.curated)
-    df = _load_curated(args.curated)
-    df = _filter_unit_type(df, args.unit_type)
+    df = load_curated(args.curated)
+    df = filter_unit_type(df, args.unit_type)
     logger.info("Rows after unit-type filter (%s): %d", args.unit_type, len(df))
 
     for sys_col in SYSTEM_COLS:

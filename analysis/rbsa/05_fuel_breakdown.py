@@ -171,7 +171,7 @@ def make_fuel_boxplots(
     fig, ax = plt.subplots(figsize=(6, 4))
     bp = ax.boxplot(
         [data_by_group[g].values for g in groups],
-        labels=groups,
+        tick_labels=groups,
         patch_artist=True,
     )
     colors = cm.Set2(np.linspace(0, 1, len(groups)))

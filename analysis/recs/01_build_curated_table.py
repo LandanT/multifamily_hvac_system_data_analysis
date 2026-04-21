@@ -130,6 +130,24 @@ def main() -> None:
     )
 
     # ------------------------------------------------------------------
+    # EUI outlier flagging
+    # ------------------------------------------------------------------
+    EUI_LOW, EUI_HIGH = 1.0, 500.0
+    eui = df["Site_EUI_kBtu_sqft"]
+    outlier_mask = eui.notna() & ((eui < EUI_LOW) | (eui > EUI_HIGH))
+    df["eui_outlier"] = outlier_mask
+    n_outliers = int(outlier_mask.sum())
+    if n_outliers:
+        logger.warning(
+            "Flagged %d rows with Site_EUI outside [%.0f, %.0f] kBtu/sqft/yr "
+            "(column 'eui_outlier'=True). Review before analysis.",
+            n_outliers, EUI_LOW, EUI_HIGH,
+        )
+        print(f"\n  ⚠ EUI outliers: {n_outliers} rows outside [{EUI_LOW}, {EUI_HIGH}] kBtu/sqft/yr")
+    else:
+        logger.info("No EUI outliers detected (range [%.0f, %.0f]).", EUI_LOW, EUI_HIGH)
+
+    # ------------------------------------------------------------------
     # Coverage report
     # ------------------------------------------------------------------
     _coverage_summary(df)

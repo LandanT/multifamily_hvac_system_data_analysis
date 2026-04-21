@@ -40,6 +40,7 @@ import pandas as pd
 from scipy import stats
 
 from src.common.log import get_logger
+from src.datasets.recs.utils import load_curated, filter_unit_type
 
 logger = get_logger("recs.04_climate")
 
@@ -53,35 +54,16 @@ BINARY_COLS = [
 
 
 # ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _load_curated(path: Path) -> pd.DataFrame:
-    return (
-        pd.read_parquet(path)
-        if path.suffix.lower() == ".parquet"
-        else pd.read_csv(path, low_memory=False)
-    )
-
-
-def _filter_unit_type(df: pd.DataFrame, unit_type: str) -> pd.DataFrame:
-    if "TYPEHUQ" not in df.columns or unit_type == "all":
-        return df
-    if unit_type == "mf":
-        return df[df["TYPEHUQ"].isin([3, 4])].copy()
-    if unit_type == "sf":
-        return df[df["TYPEHUQ"].isin([1, 2])].copy()
-    return df
-
-
-# ---------------------------------------------------------------------------
 # Strategy A: OLS regression
 # ---------------------------------------------------------------------------
 
 
 def run_ols(df: pd.DataFrame, binary_col: str, use_weights: bool = False) -> dict:
-    """OLS: Site_EUI ~ distributed_dummy + C(IECC_climate_code) + YEARMADERANGE + log(TOTSQFT_EN)."""
+    """OLS: Site_EUI ~ distributed_dummy + C(IECC_climate_code) + YEARMADERANGE + log(TOTSQFT_EN).
+
+    Note: YEARMADERANGE is an ordinal category code (1–8), not actual year.
+    Its coefficient should be interpreted as "per ordinal category step."
+    """
     try:
         import statsmodels.api as sm
     except ImportError:
@@ -140,6 +122,80 @@ def run_ols(df: pd.DataFrame, binary_col: str, use_weights: bool = False) -> dic
         "significant": bool(float(pval) < ALPHA) if pval is not None else None,
         "summary": model.summary().as_text(),
     }
+
+
+# ---------------------------------------------------------------------------
+# Strategy A′: OLS with vintage × system-type interaction
+# ---------------------------------------------------------------------------
+
+
+def run_ols_interaction(df: pd.DataFrame, binary_col: str, use_weights: bool = False) -> dict:
+    """OLS with interaction term: _distributed * YEARMADERANGE.
+
+    Tests whether the system-type effect on EUI varies with building age.
+    A significant interaction means the Central-vs-Distributed gap changes
+    across vintage categories.
+    """
+    try:
+        import statsmodels.api as sm
+    except ImportError:
+        return {"error": "statsmodels not installed; skipping OLS"}
+
+    sub = df[df[binary_col].isin(["Central", "Distributed"])].copy()
+    needed = [OUTCOME_COL, binary_col, "IECC_climate_code", "YEARMADERANGE", "TOTSQFT_EN"]
+    for c in needed:
+        if c not in sub.columns:
+            return {"error": f"Required column missing: {c}"}
+    sub = sub[needed + (["NWEIGHT"] if use_weights and "NWEIGHT" in sub.columns else [])].dropna()
+
+    if len(sub) < 10:
+        return {"error": f"Too few observations for OLS (n={len(sub)})"}
+
+    sub["_distributed"] = (sub[binary_col] == "Distributed").astype(int)
+    sub["YEARMADERANGE"] = pd.to_numeric(sub["YEARMADERANGE"], errors="coerce")
+    sub["TOTSQFT_EN"] = pd.to_numeric(sub["TOTSQFT_EN"], errors="coerce")
+    sub["_log_sqft"] = np.log(sub["TOTSQFT_EN"].clip(lower=1))
+    sub["_dist_x_vintage"] = sub["_distributed"] * sub["YEARMADERANGE"]
+    sub = sub.dropna(subset=["_distributed", "YEARMADERANGE", "_log_sqft", "_dist_x_vintage", OUTCOME_COL])
+
+    if len(sub) < 10:
+        return {"error": f"Too few complete observations after coercion (n={len(sub)})"}
+
+    climate_dummies = pd.get_dummies(
+        sub["IECC_climate_code"].astype(str), prefix="climate", drop_first=True
+    )
+
+    X_cols_df = pd.concat(
+        [sub[["_distributed", "YEARMADERANGE", "_log_sqft", "_dist_x_vintage"]], climate_dummies],
+        axis=1,
+    ).astype(float)
+    X = sm.add_constant(X_cols_df)
+    y = sub[OUTCOME_COL].astype(float)
+
+    kwargs: dict = {}
+    if use_weights and "NWEIGHT" in sub.columns:
+        kwargs["weights"] = sub["NWEIGHT"].astype(float)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        model = sm.OLS(y, X, **kwargs).fit()
+
+    result: dict = {"n": int(model.nobs), "R2": round(model.rsquared, 3)}
+
+    for term in ["_distributed", "_dist_x_vintage", "YEARMADERANGE"]:
+        coef = model.params.get(term)
+        pval = model.pvalues.get(term)
+        ci = model.conf_int().loc[term] if term in model.conf_int().index else (None, None)
+        result[f"coef_{term}"] = round(float(coef), 2) if coef is not None else None
+        result[f"p_{term}"] = round(float(pval), 4) if pval is not None else None
+        result[f"ci_low_{term}"] = round(float(ci[0]), 2) if ci[0] is not None else None
+        result[f"ci_high_{term}"] = round(float(ci[1]), 2) if ci[1] is not None else None
+
+    result["interaction_significant"] = bool(
+        float(result.get("p__dist_x_vintage", 1.0) or 1.0) < ALPHA
+    )
+    result["summary"] = model.summary().as_text()
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -259,11 +315,12 @@ def main() -> None:
     args.outdir.mkdir(parents=True, exist_ok=True)
 
     logger.info("Loading curated data from %s", args.curated)
-    df = _load_curated(args.curated)
-    df = _filter_unit_type(df, args.unit_type)
+    df = load_curated(args.curated)
+    df = filter_unit_type(df, args.unit_type)
     logger.info("Rows after unit-type filter (%s): %d", args.unit_type, len(df))
 
     all_ols = []
+    all_ols_interact = []
     all_zone = []
 
     for binary_col in BINARY_COLS:
@@ -290,12 +347,40 @@ def main() -> None:
                 f"    → {sig_str} (α={ALPHA})\n"
                 f"    Interpretation: Distributed EUI is {ols['coef_distributed']:+.1f} kBtu/sqft/yr "
                 f"relative to Central, after controlling for IECC climate zone, "
-                f"YEARMADERANGE, and log(TOTSQFT_EN)."
+                f"YEARMADERANGE (ordinal 1–8), and log(TOTSQFT_EN)."
             )
         all_ols.append({
             "system_col": sys_label,
             "outcome": OUTCOME_COL,
             **{k: v for k, v in ols.items() if k != "summary"},
+        })
+
+        # --- Strategy A′: OLS with interaction ---
+        print(f"\n  [OLS + vintage interaction] {OUTCOME_COL}")
+        ols_int = run_ols_interaction(df, binary_col, use_weights=args.use_weights)
+        if "error" in ols_int:
+            print(f"    {ols_int['error']}")
+        else:
+            int_sig = "✓ SIGNIFICANT" if ols_int["interaction_significant"] else "✗ not significant"
+            print(
+                f"    n={ols_int['n']},  R²={ols_int['R2']}\n"
+                f"    _distributed          coef={ols_int['coef__distributed']:+.2f}  "
+                f"p={ols_int['p__distributed']}  CI=[{ols_int['ci_low__distributed']}, {ols_int['ci_high__distributed']}]\n"
+                f"    YEARMADERANGE         coef={ols_int['coef_YEARMADERANGE']:+.2f}  "
+                f"p={ols_int['p_YEARMADERANGE']}\n"
+                f"    _dist × vintage       coef={ols_int['coef__dist_x_vintage']:+.2f}  "
+                f"p={ols_int['p__dist_x_vintage']}  "
+                f"CI=[{ols_int['ci_low__dist_x_vintage']}, {ols_int['ci_high__dist_x_vintage']}]\n"
+                f"    → Interaction {int_sig} (α={ALPHA})\n"
+                f"    Interpretation: A {'significant' if ols_int['interaction_significant'] else 'non-significant'} "
+                f"interaction means the system-type EUI gap "
+                f"{'does' if ols_int['interaction_significant'] else 'does NOT'} "
+                f"vary with building vintage."
+            )
+        all_ols_interact.append({
+            "system_col": sys_label,
+            "outcome": OUTCOME_COL,
+            **{k: v for k, v in ols_int.items() if k != "summary"},
         })
 
         # --- Strategy B: Within-zone ---
@@ -318,9 +403,29 @@ def main() -> None:
         make_scatter(df, binary_col, args.outdir)
 
     # Save results
-    pd.DataFrame(all_ols).to_csv(args.outdir / "04_ols_results.csv", index=False)
-    pd.DataFrame(all_zone).to_csv(args.outdir / "04_within_zone_results.csv", index=False)
-    logger.info("Saved OLS and within-zone results CSVs.")
+    ols_df = pd.DataFrame(all_ols)
+    zone_df = pd.DataFrame(all_zone)
+
+    # Multiple-testing note for within-zone tests
+    if not zone_df.empty and "p_value" in zone_df.columns:
+        tested = zone_df[zone_df["p_value"].notna()]
+        n_tests = len(tested)
+        if n_tests > 1:
+            bonferroni_alpha = round(ALPHA / n_tests, 4)
+            n_bonf_sig = int((tested["p_value"] < bonferroni_alpha).sum())
+            print(
+                f"\n  ⚠ Within-zone multiple testing: {n_tests} tests at α={ALPHA}."
+                f"\n    Bonferroni-adjusted α = {bonferroni_alpha}"
+                f" → {n_bonf_sig} of {n_tests} remain significant after correction."
+            )
+            zone_df["bonferroni_significant"] = zone_df["p_value"] < bonferroni_alpha
+
+    ols_df.to_csv(args.outdir / "04_ols_results.csv", index=False)
+    zone_df.to_csv(args.outdir / "04_within_zone_results.csv", index=False)
+    pd.DataFrame(all_ols_interact).to_csv(
+        args.outdir / "04_ols_interaction_results.csv", index=False
+    )
+    logger.info("Saved OLS, interaction-OLS, and within-zone results CSVs.")
 
 
 if __name__ == "__main__":

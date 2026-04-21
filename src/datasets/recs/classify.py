@@ -27,6 +27,7 @@ the classification sets below use integer literals accordingly.
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 
@@ -180,8 +181,74 @@ def classify_dhw(row: pd.Series) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _classify_heating_vectorized(df: pd.DataFrame) -> pd.Series:
+    """Vectorized heating classification — same logic as :func:`classify_heating`."""
+    heathome = pd.to_numeric(df.get("HEATHOME"), errors="coerce")
+    heatapt = pd.to_numeric(df.get("HEATAPT"), errors="coerce")
+    equipm = pd.to_numeric(df.get("EQUIPM"), errors="coerce")
+
+    has_heat = heathome == 1
+    result = pd.Series("Unknown", index=df.index)
+
+    result = result.where(~(has_heat & (heatapt == 1)), "Central")
+    result = result.where(~(has_heat & (heatapt == 0)), "Distributed")
+
+    needs_infer = has_heat & heatapt.isna()
+    result = result.where(
+        ~(needs_infer & equipm.isin(_HEATING_DISTRIBUTED_EQUIP)),
+        "Distributed (inferred)",
+    )
+    result = result.where(
+        ~(needs_infer & equipm.isin(_HEATING_CENTRAL_EQUIP)),
+        "Central (inferred)",
+    )
+    return result
+
+
+def _classify_cooling_vectorized(df: pd.DataFrame) -> pd.Series:
+    """Vectorized cooling classification — same logic as :func:`classify_cooling`."""
+    aircond = pd.to_numeric(df.get("AIRCOND"), errors="coerce")
+    coolapt = pd.to_numeric(df.get("COOLAPT"), errors="coerce")
+    acequipm = pd.to_numeric(df.get("ACEQUIPM_PUB"), errors="coerce")
+
+    has_ac = aircond == 1
+    result = pd.Series("Unknown", index=df.index)
+
+    result = result.where(~(has_ac & (coolapt == 1)), "Central")
+    result = result.where(~(has_ac & (coolapt == 0)), "Distributed")
+
+    needs_infer = has_ac & coolapt.isna()
+    result = result.where(
+        ~(needs_infer & acequipm.isin(_COOLING_CENTRAL_EQUIP)),
+        "Central (inferred)",
+    )
+    result = result.where(
+        ~(needs_infer & acequipm.isin(_COOLING_DISTRIBUTED_EQUIP)),
+        "Distributed (inferred)",
+    )
+    return result
+
+
+def _classify_dhw_vectorized(df: pd.DataFrame) -> pd.Series:
+    """Vectorized DHW classification — same logic as :func:`classify_dhw`."""
+    h2oapt = pd.to_numeric(df.get("H2OAPT"), errors="coerce")
+    morethan1 = pd.to_numeric(df.get("MORETHAN1H2O"), errors="coerce")
+
+    result = pd.Series("Unknown", index=df.index)
+
+    # Priority order: Central > Mixed > Distributed (applied in reverse
+    # because later .where() calls overwrite earlier ones for the same row).
+    result = result.where(~(h2oapt == 0), "Distributed")
+    result = result.where(~(h2oapt.isna() & (morethan1 == 1)), "Mixed")
+    result = result.where(~(h2oapt == 1), "Central")
+    return result
+
+
 def add_system_classifications(df: pd.DataFrame) -> pd.DataFrame:
     """Add classification columns for heating, cooling and DHW.
+
+    Uses vectorized column operations instead of row-wise ``apply`` for
+    significantly better performance on large DataFrames.
 
     Parameters
     ----------
@@ -196,9 +263,9 @@ def add_system_classifications(df: pd.DataFrame) -> pd.DataFrame:
         and their ``_binary`` variants.
     """
     df = df.copy()
-    df["heating_system_type"] = df.apply(classify_heating, axis=1)
-    df["cooling_system_type"] = df.apply(classify_cooling, axis=1)
-    df["dhw_system_type"] = df.apply(classify_dhw, axis=1)
+    df["heating_system_type"] = _classify_heating_vectorized(df)
+    df["cooling_system_type"] = _classify_cooling_vectorized(df)
+    df["dhw_system_type"] = _classify_dhw_vectorized(df)
 
     df["heating_system_type_binary"] = to_binary(df["heating_system_type"])
     df["cooling_system_type_binary"] = to_binary(df["cooling_system_type"])
