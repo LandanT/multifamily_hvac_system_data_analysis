@@ -200,6 +200,16 @@ def add_site_classifications(master_df: pd.DataFrame, wh_df: pd.DataFrame) -> pd
     df = df.merge(dhw_per_site, on="SiteID", how="left")
     df["dhw_system_type"] = df["dhw_system_type"].fillna("Unknown")
 
+    # Normalize verbose DHW labels to binary Central/Distributed so that
+    # downstream analysis scripts (steps 02–05) can filter on the same
+    # labels used for heating/cooling classification.
+    _DHW_LABEL_MAP = {
+        "Distributed (In-unit)": "Distributed",
+        "Combined with Heating System": "Central",
+        "Central (Indirect/Boiler-fed)": "Central",
+    }
+    df["dhw_system_type"] = df["dhw_system_type"].replace(_DHW_LABEL_MAP)
+
     return df
 
 

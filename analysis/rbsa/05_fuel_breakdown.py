@@ -49,6 +49,8 @@ FUEL_LABELS = {
     "Annual Electric Usage (kBtu)": "Electricity",
     "Annual Gas Usage (kBtu)": "Natural Gas",
     "Total Delivered Fuel (kBtu)": "Delivered Fuel",
+    "Electric_EUI_kBtu_sqft": "Electric EUI",
+    "Gas_EUI_kBtu_sqft": "Gas EUI",
 }
 
 FUEL_COLORS = [
@@ -116,14 +118,13 @@ def make_stacked_bar(
     ax.set_xticks(range(len(groups)))
     ax.set_xticklabels(groups, rotation=15, ha="right", fontsize=9)
     ax.legend(loc="upper right", fontsize=7, title="Fuel Type", bbox_to_anchor=(1.3, 1.0))
-    ax.text(
-        0.5, -0.12,
-        "⚠ Median values — check sample sizes before interpreting",
-        transform=ax.transAxes,
-        ha="center", fontsize=7, color="red",
-    )
 
     fig.tight_layout()
+    fig.text(
+        0.5, 0.01,
+        "⚠ Median values — check sample sizes before interpreting",
+        ha="center", fontsize=7, color="red",
+    )
     fig.savefig(fname, dpi=150, bbox_inches="tight")
     plt.close(fig)
     logger.info("Saved %s", fname)
@@ -170,7 +171,7 @@ def make_fuel_boxplots(
     fig, ax = plt.subplots(figsize=(6, 4))
     bp = ax.boxplot(
         [data_by_group[g].values for g in groups],
-        labels=groups,
+        tick_labels=groups,
         patch_artist=True,
     )
     colors = cm.Set2(np.linspace(0, 1, len(groups)))
@@ -181,12 +182,12 @@ def make_fuel_boxplots(
     ylim = ax.get_ylim()
     for i, grp in enumerate(groups):
         n = len(data_by_group[grp])
-        ax.text(i + 1, ylim[0] - 0.03 * (ylim[1] - ylim[0]),
-                f"n={n}", ha="center", va="top", fontsize=8, color="dimgray")
+        ax.text(i + 1, ylim[0] + 0.01 * (ylim[1] - ylim[0]),
+                f"n={n}", ha="center", va="bottom", fontsize=8, color="dimgray")
 
     label = FUEL_LABELS.get(fuel_col, fuel_col)
     ax.set_title(f"{label} by {system_col}\n[{fuel_stratum} homes]", fontsize=9)
-    ax.set_ylabel(f"kBtu/yr")
+    ax.set_ylabel("kBtu/sqft/yr")
     ax.set_xticklabels(groups, rotation=15, ha="right")
     fig.tight_layout()
 
@@ -275,10 +276,10 @@ def main() -> None:
             normalize=True,
         )
 
-        # Per-fuel box plots within electric and gas subsets
+        # Per-fuel box plots within electric and gas subsets (EUI normalised by sqft)
         for stratum, sub_df, fuel_metric in [
-            ("Electric homes", electric_sub, "Annual Electric Usage (kBtu)"),
-            ("Gas homes", gas_sub, "Annual Gas Usage (kBtu)"),
+            ("Electric", electric_sub, "Electric_EUI_kBtu_sqft"),
+            ("Gas", gas_sub, "Gas_EUI_kBtu_sqft"),
         ]:
             if sys_col in sub_df.columns and fuel_metric in sub_df.columns:
                 make_fuel_boxplots(sub_df, sys_col, fuel_metric, stratum, args.outdir)

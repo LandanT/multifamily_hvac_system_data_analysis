@@ -1,21 +1,20 @@
-"""Prompt 5 (part 1) — Exploratory Distributions.
+"""RECS 2020 — Step 2: Exploratory distributions.
 
 Produces:
   1. Box plots of Site_EUI_kBtu_sqft and Electric_EUI_kBtu_sqft by
      heating_system_type, cooling_system_type, and dhw_system_type.
-  2. Confounding check: Heating_Zone stacked bars within each system-type
-     category.
+  2. Confounding check: IECC_climate_code and YEARMADERANGE stacked bars
+     within each system-type category.
   3. Cross-tab of heating_system_type × cooling_system_type.
-  4. Summary stats (n, median, IQR, mean) for each group — saved as CSV.
+  4. Summary stats (n, median, IQR, mean, std) for each group — saved as CSV.
 
-Input is the pre-built site master parquet (output of 01_build_curated_mf_table.py).
-SF focus for EUI analysis (per Prompt 5 spec) but MF unit rows are also shown.
+Input is the pre-built curated parquet (output of 01_build_curated_table.py).
 
 Usage::
 
-    python analysis/rbsa/02_exploratory_distributions.py \\
-        --site-master outputs/rbsa/rbsa_site_master_*.parquet \\
-        --outdir outputs/rbsa
+    python analysis/recs/02_exploratory_distributions.py \\
+        --curated outputs/recs/recs2020_curated_*.parquet \\
+        --outdir outputs/recs
 """
 
 from __future__ import annotations
@@ -33,28 +32,12 @@ import numpy as np
 import pandas as pd
 
 from src.common.log import get_logger
+from src.datasets.recs.utils import load_curated, filter_unit_type
 
-logger = get_logger("rbsa.02_explore")
+logger = get_logger("recs.02_explore")
 
 EUI_COLS = ["Site_EUI_kBtu_sqft", "Electric_EUI_kBtu_sqft", "Gas_EUI_kBtu_sqft"]
 SYSTEM_COLS = ["heating_system_type", "cooling_system_type", "dhw_system_type"]
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _load_site_master(path: Path) -> pd.DataFrame:
-    return (
-        pd.read_parquet(path)
-        if path.suffix.lower() == ".parquet"
-        else pd.read_csv(path, low_memory=False)
-    )
-
-
-def _bt_col(df: pd.DataFrame) -> str | None:
-    return next((c for c in ["Building_Type", "Building Type"] if c in df.columns), None)
 
 
 def make_boxplots(df: pd.DataFrame, system_col: str, eui_cols: list[str], outdir: Path) -> None:
@@ -79,7 +62,7 @@ def make_boxplots(df: pd.DataFrame, system_col: str, eui_cols: list[str], outdir
         }
         plot_data = [data_by_group[g].values for g in groups_raw]
 
-        bp = ax.boxplot(plot_data, tick_labels=groups_raw, patch_artist=True, notch=False)
+        bp = ax.boxplot(plot_data, labels=groups_raw, patch_artist=True, notch=False)
         colors = plt.cm.Set2(np.linspace(0, 1, len(groups_raw)))
         for patch, color in zip(bp["boxes"], colors):
             patch.set_facecolor(color)
@@ -113,9 +96,13 @@ def make_boxplots(df: pd.DataFrame, system_col: str, eui_cols: list[str], outdir
 
 
 def make_confounding_charts(df: pd.DataFrame, system_col: str, outdir: Path) -> None:
-    """Stacked bar of Heating_Zone distribution within each system type."""
-    for cat_col, label in [("Heating_Zone", "heating_zone"), (_bt_col(df), "building_type")]:
-        if cat_col is None or cat_col not in df.columns:
+    """Stacked bars showing climate zone and vintage distribution within each system type."""
+    confound_cols = [
+        ("IECC_climate_code", "climate_zone"),
+        ("YEARMADERANGE", "vintage"),
+    ]
+    for cat_col, label in confound_cols:
+        if cat_col not in df.columns:
             continue
 
         sub = df[[system_col, cat_col]].dropna()
@@ -148,21 +135,28 @@ def make_confounding_charts(df: pd.DataFrame, system_col: str, outdir: Path) -> 
 
 def print_summary_stats(df: pd.DataFrame, system_col: str, eui_cols: list[str]) -> None:
     present = [c for c in eui_cols if c in df.columns]
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Summary stats — {system_col}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
+
+    _SHORT = {
+        "Site_EUI_kBtu_sqft": "SiteEUI",
+        "Electric_EUI_kBtu_sqft": "ElecEUI",
+        "Gas_EUI_kBtu_sqft": "GasEUI",
+    }
 
     rows = []
     for grp, gdf in df.groupby(system_col):
         row = {"system_type": grp}
         for col in present:
             vals = gdf[col].dropna()
-            row[f"n_{col[:12]}"] = len(vals)
-            row[f"median_{col[:12]}"] = round(vals.median(), 1) if len(vals) else None
-            row[f"IQR_{col[:12]}"] = (
+            short = _SHORT.get(col, col)
+            row[f"n_{short}"] = len(vals)
+            row[f"median_{short}"] = round(vals.median(), 1) if len(vals) else None
+            row[f"IQR_{short}"] = (
                 round(vals.quantile(0.75) - vals.quantile(0.25), 1) if len(vals) else None
             )
-            row[f"mean_{col[:12]}"] = round(vals.mean(), 1) if len(vals) else None
+            row[f"mean_{short}"] = round(vals.mean(), 1) if len(vals) else None
         rows.append(row)
 
     summary = pd.DataFrame(rows).set_index("system_type")
@@ -175,32 +169,34 @@ def print_summary_stats(df: pd.DataFrame, system_col: str, eui_cols: list[str]) 
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Exploratory distributions for RBSA site master.")
-    ap.add_argument("--site-master", type=Path, required=True,
-                    help="Path to rbsa_site_master_*.parquet (or .csv) from 01_build_curated_mf_table.py")
-    ap.add_argument("--outdir", type=Path, default=Path("outputs/rbsa"),
-                    help="Directory for output figures and CSVs.")
+    ap = argparse.ArgumentParser(description="Exploratory distributions for RECS 2020.")
     ap.add_argument(
-        "--building-type",
+        "--curated", type=Path, required=True,
+        help="Path to recs2020_curated_*.parquet (output of 01_build_curated_table.py).",
+    )
+    ap.add_argument(
+        "--outdir", type=Path, default=Path("outputs/recs"),
+        help="Directory for output figures and CSVs (default: outputs/recs).",
+    )
+    ap.add_argument(
+        "--unit-type",
         choices=["mf", "sf", "all"],
         default="mf",
-        help="Building type filter: 'mf' = multifamily only (default), 'sf' = single-family only, 'all' = no filter.",
+        help=(
+            "Housing unit filter: 'mf' = multifamily only / TYPEHUQ 3–4 (default), "
+            "'sf' = single-family / TYPEHUQ 1–2, 'all' = no filter."
+        ),
     )
     args = ap.parse_args()
 
     args.outdir.mkdir(parents=True, exist_ok=True)
 
-    logger.info("Loading site master from %s", args.site_master)
-    df = _load_site_master(args.site_master)
+    logger.info("Loading curated data from %s", args.curated)
+    df = load_curated(args.curated)
     logger.info("Loaded %d rows", len(df))
 
-    bt = _bt_col(df)
-    if args.building_type == "sf" and bt:
-        df = df[df[bt].str.lower().str.contains("single", na=False)].copy()
-        logger.info("SF-only filter: %d rows", len(df))
-    elif args.building_type == "mf" and bt:
-        df = df[df[bt].str.lower().str.contains("multi", na=False)].copy()
-        logger.info("MF-only filter: %d rows", len(df))
+    df = filter_unit_type(df, args.unit_type)
+    logger.info("After unit-type filter (%s): %d rows", args.unit_type, len(df))
 
     # Filter to rows with at least one EUI value
     has_eui = df[EUI_COLS].notna().any(axis=1)
