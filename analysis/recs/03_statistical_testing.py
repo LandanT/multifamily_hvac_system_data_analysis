@@ -1,15 +1,15 @@
 """RECS 2020 — Step 3: Statistical testing (Mann-Whitney U).
 
-For each pair (Central vs. Distributed) × (Heating / Cooling / DHW):
-  - Mann-Whitney U test on Site_EUI_kBtu_sqft, Heating_EUI_kBtu_sqft,
-    DHW_EUI_kBtu_sqft
-  - Reports: U statistic, p-value, rank-biserial correlation (effect size),
-    sample sizes, significance at α=0.05
-  - Stratified by primary heating fuel (ELWARM vs. UGWARM) to avoid
-    fuel-type confounding, following the RBSA approach
+Refocused around heating:
 
-"Inferred" labels are collapsed to binary before testing (e.g.,
-"Central (inferred)" → "Central") via the binary columns added in step 01.
+  - **Primary outcome**: Heating_EUI_kBtu_sqft
+  - **Secondary outcome**: Site_EUI_kBtu_sqft
+  - Tests are run across a grid of:
+      * MF segment  (all MF / 2–4 units / 5+ units)
+      * Fuel stratum (all fuels / electric-heated / gas-heated)
+      * Classification view (pooled binary / explicit only / inferred only)
+  - Reports: U statistic, p-value, rank-biserial correlation (effect size),
+    sample sizes, significance at α = 0.05
 
 Usage::
 
@@ -30,27 +30,36 @@ import pandas as pd
 from scipy import stats
 
 from src.common.log import get_logger
-from src.datasets.recs.utils import load_curated, filter_unit_type
+from src.datasets.recs.utils import (
+    load_curated,
+    filter_unit_type,
+    filter_segment,
+    filter_fuel,
+    filter_classification_view,
+    MF_SEGMENTS,
+    FUEL_STRATA,
+    CLASSIFICATION_VIEWS,
+    friendly_label,
+)
 
 logger = get_logger("recs.03_stats")
 
 ALPHA = 0.05
 
+# Primary outcome first, secondary second
 OUTCOME_COLS = [
-    "Site_EUI_kBtu_sqft",
     "Heating_EUI_kBtu_sqft",
+    "Site_EUI_kBtu_sqft",
     "DHW_EUI_kBtu_sqft",
 ]
 
-# Binary classification columns (set by add_system_classifications in step 01)
-BINARY_COLS = [
-    "heating_system_type_binary",
+# We focus on heating system type for the refocused analysis, but keep
+# cooling and DHW as secondary passes (pooled binary, all MF, all fuels only)
+BINARY_COL_PRIMARY = "heating_system_type_binary"
+BINARY_COLS_SECONDARY = [
     "cooling_system_type_binary",
     "dhw_system_type_binary",
 ]
-
-# Fuel strata: None = all households; "electric" / "gas" = subset by fuel flag
-FUEL_STRATA = [None, "electric", "gas"]
 
 
 def rank_biserial(x: np.ndarray, y: np.ndarray) -> float:
@@ -67,7 +76,6 @@ def compare_groups(
     distributed: pd.Series,
     metric: str,
     system_col: str,
-    stratum: str | None = None,
 ) -> dict:
     """Run Mann-Whitney U and return a result dict."""
     c = central.dropna().values
@@ -76,17 +84,20 @@ def compare_groups(
     result = {
         "system_col": system_col,
         "metric": metric,
-        "fuel_stratum": stratum or "All",
         "n_central": len(c),
         "n_distributed": len(d),
         "median_central": round(float(np.median(c)), 2) if len(c) else None,
         "median_distributed": round(float(np.median(d)), 2) if len(d) else None,
+        "delta_median": None,
         "U_statistic": None,
         "p_value": None,
         "rank_biserial_r": None,
         "significant": None,
         "note": "",
     }
+
+    if result["median_central"] is not None and result["median_distributed"] is not None:
+        result["delta_median"] = round(result["median_central"] - result["median_distributed"], 2)
 
     if len(c) < 2 or len(d) < 2:
         result["note"] = f"Insufficient data (n_central={len(c)}, n_distributed={len(d)})"
@@ -134,62 +145,92 @@ def main() -> None:
 
     results = []
 
-    for binary_col in BINARY_COLS:
+    # ==================================================================
+    # PRIMARY: heating system type across segment × fuel × view grid
+    # ==================================================================
+    binary_col = BINARY_COL_PRIMARY
+    sys_label = binary_col.replace("_binary", "")
+
+    if binary_col not in df.columns:
+        logger.error("%s not found — cannot proceed", binary_col)
+        return
+
+    for seg_key in MF_SEGMENTS:
+        seg_df = filter_segment(df, seg_key)
+        for fuel_key in FUEL_STRATA:
+            fuel_df = filter_fuel(seg_df, fuel_key)
+            for view in CLASSIFICATION_VIEWS:
+                view_df = filter_classification_view(fuel_df, view, binary_col)
+
+                central = view_df[view_df[binary_col] == "Central"]
+                distributed = view_df[view_df[binary_col] == "Distributed"]
+
+                label = friendly_label(seg_key, fuel_key, view)
+                print(f"\n{'=' * 70}")
+                print(
+                    f"  {sys_label}  [{label}]\n"
+                    f"  Central (n={len(central)}) vs Distributed (n={len(distributed)})"
+                )
+                print(f"{'=' * 70}")
+
+                for metric in OUTCOME_COLS:
+                    if metric not in df.columns:
+                        continue
+
+                    res = compare_groups(
+                        central[metric], distributed[metric],
+                        metric, sys_label,
+                    )
+                    res["mf_segment"] = seg_key
+                    res["fuel_stratum"] = fuel_key
+                    res["classification_view"] = view
+                    results.append(res)
+
+                    sig_str = "✓ SIGNIFICANT" if res["significant"] else "✗ not significant"
+                    if res["significant"] is None:
+                        sig_str = f"— [{res['note']}]"
+                    note_str = f"  [{res['note']}]" if res["note"] and res["significant"] is not None else ""
+                    print(
+                        f"\n  {metric}\n"
+                        f"    n_central={res['n_central']}, n_distributed={res['n_distributed']}\n"
+                        f"    median_central={res['median_central']},  "
+                        f"median_distributed={res['median_distributed']}\n"
+                        f"    U={res['U_statistic']},  p={res['p_value']},  "
+                        f"r_rb={res['rank_biserial_r']}\n"
+                        f"    → {sig_str} (α={ALPHA}){note_str}"
+                    )
+
+    # ==================================================================
+    # SECONDARY: cooling / DHW — pooled binary, all MF, all fuels only
+    # ==================================================================
+    for binary_col in BINARY_COLS_SECONDARY:
         if binary_col not in df.columns:
             logger.warning("%s not found — skipping", binary_col)
             continue
 
         sys_label = binary_col.replace("_binary", "")
         classifiable = df[df[binary_col].isin(["Central", "Distributed"])].copy()
+        central = classifiable[classifiable[binary_col] == "Central"]
+        distributed = classifiable[classifiable[binary_col] == "Distributed"]
 
-        for stratum in FUEL_STRATA:
-            if stratum == "electric":
-                if "ELWARM" not in df.columns:
-                    continue
-                sub = classifiable[classifiable["ELWARM"] == 1].copy()
-                stratum_label = "Electric (ELWARM=1)"
-            elif stratum == "gas":
-                if "UGWARM" not in df.columns:
-                    continue
-                sub = classifiable[classifiable["UGWARM"] == 1].copy()
-                stratum_label = "Natural Gas (UGWARM=1)"
-            else:
-                sub = classifiable
-                stratum_label = "All"
+        print(f"\n{'=' * 70}")
+        print(
+            f"  {sys_label}  [All MF | All Fuels | pooled binary]\n"
+            f"  Central (n={len(central)}) vs Distributed (n={len(distributed)})"
+        )
+        print(f"{'=' * 70}")
 
-            central = sub[sub[binary_col] == "Central"]
-            distributed = sub[sub[binary_col] == "Distributed"]
-
-            print(f"\n{'=' * 70}")
-            print(
-                f"  {sys_label}  [{stratum_label}]  —  "
-                f"Central (n={len(central)}) vs Distributed (n={len(distributed)})"
+        for metric in OUTCOME_COLS:
+            if metric not in df.columns:
+                continue
+            res = compare_groups(
+                central[metric], distributed[metric],
+                metric, sys_label,
             )
-            print(f"{'=' * 70}")
-
-            for metric in OUTCOME_COLS:
-                if metric not in df.columns:
-                    continue
-
-                res = compare_groups(
-                    central[metric], distributed[metric],
-                    metric, sys_label, stratum_label,
-                )
-                results.append(res)
-
-                sig_str = "✓ SIGNIFICANT" if res["significant"] else "✗ not significant"
-                if res["significant"] is None:
-                    sig_str = f"— [{res['note']}]"
-                note_str = f"  [{res['note']}]" if res["note"] and res["significant"] is not None else ""
-                print(
-                    f"\n  {metric}\n"
-                    f"    n_central={res['n_central']}, n_distributed={res['n_distributed']}\n"
-                    f"    median_central={res['median_central']},  "
-                    f"median_distributed={res['median_distributed']}\n"
-                    f"    U={res['U_statistic']},  p={res['p_value']},  "
-                    f"r_rb={res['rank_biserial_r']}\n"
-                    f"    → {sig_str} (α={ALPHA}){note_str}"
-                )
+            res["mf_segment"] = "all_mf"
+            res["fuel_stratum"] = "all_fuels"
+            res["classification_view"] = "pooled_binary"
+            results.append(res)
 
     # Summary table
     print(f"\n{'=' * 70}")
@@ -197,10 +238,14 @@ def main() -> None:
     print(f"{'=' * 70}")
     result_df = pd.DataFrame(results)
     if not result_df.empty:
-        print(result_df[[
-            "system_col", "fuel_stratum", "metric", "n_central", "n_distributed",
+        display_cols = [
+            "system_col", "mf_segment", "fuel_stratum", "classification_view",
+            "metric", "n_central", "n_distributed",
+            "median_central", "median_distributed",
             "U_statistic", "p_value", "rank_biserial_r", "significant",
-        ]].to_string(index=False))
+        ]
+        display_cols = [c for c in display_cols if c in result_df.columns]
+        print(result_df[display_cols].to_string(index=False))
 
         # Multiple-testing note
         n_tests = len(result_df[result_df["p_value"].notna()])

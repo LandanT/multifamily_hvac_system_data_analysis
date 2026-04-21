@@ -42,15 +42,18 @@ from pathlib import Path
 # Resolve the repo root so child scripts can import src.*
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-STEPS = ["01", "02", "03", "04", "05", "06"]
+STEPS = ["01", "02", "02b", "03", "04", "05", "05b", "06", "07"]
 
 SCRIPT_MAP = {
     "01": _REPO_ROOT / "analysis" / "recs" / "01_build_curated_table.py",
     "02": _REPO_ROOT / "analysis" / "recs" / "02_exploratory_distributions.py",
+    "02b": _REPO_ROOT / "analysis" / "recs" / "02b_sample_balance_and_prevalence.py",
     "03": _REPO_ROOT / "analysis" / "recs" / "03_statistical_testing.py",
     "04": _REPO_ROOT / "analysis" / "recs" / "04_climate_vintage_controlled.py",
     "05": _REPO_ROOT / "analysis" / "recs" / "05_fuel_breakdown.py",
+    "05b": _REPO_ROOT / "analysis" / "recs" / "05b_sensitivity_matrix.py",
     "06": _REPO_ROOT / "analysis" / "recs" / "06_compare_with_other.py",
+    "07": _REPO_ROOT / "analysis" / "recs" / "07_presentation_plots.py",
 }
 
 
@@ -131,7 +134,7 @@ def main() -> None:
                 "--unit-type", args.unit_type,
             ]
 
-        elif step in ("02", "03", "04", "05"):
+        elif step in ("02", "02b", "03", "04", "05", "05b", "07"):
             curated = _find_curated(args.outdir)
             if curated is None:
                 print(f"\n  ERROR: curated parquet not found in {args.outdir}. Run step 01 first.")

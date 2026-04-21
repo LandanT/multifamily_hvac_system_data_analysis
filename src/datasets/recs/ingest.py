@@ -69,6 +69,11 @@ _SENTINEL_COLS = [
     "LPWATER",
     "FOWATER",
     "ELWATER",
+    # Amenity / EV indicators
+    "SWIMPOOL",
+    "RECBATH",
+    "ELECVEH",
+    "EVCHRGHOME",
 ]
 
 # Energy and size columns that may contain sentinels
@@ -81,6 +86,7 @@ _ENERGY_COLS = [
     "BTUNG",
     "BTULP",
     "BTUFO",
+    "BTUELEVCHRG",
     "TOTSQFT_EN",
     # Heated-area column referenced in spec (may not be present in all vintages)
     "TOTHSQFT",

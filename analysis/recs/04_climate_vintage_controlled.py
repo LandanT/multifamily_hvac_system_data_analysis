@@ -40,14 +40,25 @@ import pandas as pd
 from scipy import stats
 
 from src.common.log import get_logger
-from src.datasets.recs.utils import load_curated, filter_unit_type
+from src.datasets.recs.utils import (
+    load_curated,
+    filter_unit_type,
+    filter_segment,
+    filter_fuel,
+    filter_classification_view,
+    MF_SEGMENTS,
+    FUEL_STRATA,
+    friendly_label,
+)
 
 logger = get_logger("recs.04_climate")
 
 ALPHA = 0.05
-OUTCOME_COL = "Site_EUI_kBtu_sqft"
-BINARY_COLS = [
-    "heating_system_type_binary",
+OUTCOME_COLS = ["Heating_EUI_kBtu_sqft", "Site_EUI_kBtu_sqft"]
+BINARY_COL = "heating_system_type_binary"
+
+# For backward compat, also run cooling/DHW in all-MF pooled only
+BINARY_COLS_SECONDARY = [
     "cooling_system_type_binary",
     "dhw_system_type_binary",
 ]
@@ -58,19 +69,15 @@ BINARY_COLS = [
 # ---------------------------------------------------------------------------
 
 
-def run_ols(df: pd.DataFrame, binary_col: str, use_weights: bool = False) -> dict:
-    """OLS: Site_EUI ~ distributed_dummy + C(IECC_climate_code) + YEARMADERANGE + log(TOTSQFT_EN).
-
-    Note: YEARMADERANGE is an ordinal category code (1–8), not actual year.
-    Its coefficient should be interpreted as "per ordinal category step."
-    """
+def run_ols(df: pd.DataFrame, binary_col: str, outcome_col: str = "Heating_EUI_kBtu_sqft", use_weights: bool = False) -> dict:
+    """OLS: outcome ~ distributed_dummy + C(IECC_climate_code) + YEARMADERANGE + log(TOTSQFT_EN)."""
     try:
         import statsmodels.api as sm
     except ImportError:
         return {"error": "statsmodels not installed; skipping OLS"}
 
     sub = df[df[binary_col].isin(["Central", "Distributed"])].copy()
-    needed = [OUTCOME_COL, binary_col, "IECC_climate_code", "YEARMADERANGE", "TOTSQFT_EN"]
+    needed = [outcome_col, binary_col, "IECC_climate_code", "YEARMADERANGE", "TOTSQFT_EN"]
     for c in needed:
         if c not in sub.columns:
             return {"error": f"Required column missing: {c}"}
@@ -83,7 +90,7 @@ def run_ols(df: pd.DataFrame, binary_col: str, use_weights: bool = False) -> dic
     sub["YEARMADERANGE"] = pd.to_numeric(sub["YEARMADERANGE"], errors="coerce")
     sub["TOTSQFT_EN"] = pd.to_numeric(sub["TOTSQFT_EN"], errors="coerce")
     sub["_log_sqft"] = np.log(sub["TOTSQFT_EN"].clip(lower=1))
-    sub = sub.dropna(subset=["_distributed", "YEARMADERANGE", "_log_sqft", OUTCOME_COL])
+    sub = sub.dropna(subset=["_distributed", "YEARMADERANGE", "_log_sqft", outcome_col])
 
     if len(sub) < 10:
         return {"error": f"Too few complete observations after coercion (n={len(sub)})"}
@@ -98,7 +105,7 @@ def run_ols(df: pd.DataFrame, binary_col: str, use_weights: bool = False) -> dic
         axis=1,
     ).astype(float)
     X = sm.add_constant(X_cols_df)
-    y = sub[OUTCOME_COL].astype(float)
+    y = sub[outcome_col].astype(float)
 
     kwargs: dict = {}
     if use_weights and "NWEIGHT" in sub.columns:
@@ -129,7 +136,7 @@ def run_ols(df: pd.DataFrame, binary_col: str, use_weights: bool = False) -> dic
 # ---------------------------------------------------------------------------
 
 
-def run_ols_interaction(df: pd.DataFrame, binary_col: str, use_weights: bool = False) -> dict:
+def run_ols_interaction(df: pd.DataFrame, binary_col: str, outcome_col: str = "Heating_EUI_kBtu_sqft", use_weights: bool = False) -> dict:
     """OLS with interaction term: _distributed * YEARMADERANGE.
 
     Tests whether the system-type effect on EUI varies with building age.
@@ -142,7 +149,7 @@ def run_ols_interaction(df: pd.DataFrame, binary_col: str, use_weights: bool = F
         return {"error": "statsmodels not installed; skipping OLS"}
 
     sub = df[df[binary_col].isin(["Central", "Distributed"])].copy()
-    needed = [OUTCOME_COL, binary_col, "IECC_climate_code", "YEARMADERANGE", "TOTSQFT_EN"]
+    needed = [outcome_col, binary_col, "IECC_climate_code", "YEARMADERANGE", "TOTSQFT_EN"]
     for c in needed:
         if c not in sub.columns:
             return {"error": f"Required column missing: {c}"}
@@ -156,7 +163,7 @@ def run_ols_interaction(df: pd.DataFrame, binary_col: str, use_weights: bool = F
     sub["TOTSQFT_EN"] = pd.to_numeric(sub["TOTSQFT_EN"], errors="coerce")
     sub["_log_sqft"] = np.log(sub["TOTSQFT_EN"].clip(lower=1))
     sub["_dist_x_vintage"] = sub["_distributed"] * sub["YEARMADERANGE"]
-    sub = sub.dropna(subset=["_distributed", "YEARMADERANGE", "_log_sqft", "_dist_x_vintage", OUTCOME_COL])
+    sub = sub.dropna(subset=["_distributed", "YEARMADERANGE", "_log_sqft", "_dist_x_vintage", outcome_col])
 
     if len(sub) < 10:
         return {"error": f"Too few complete observations after coercion (n={len(sub)})"}
@@ -170,7 +177,7 @@ def run_ols_interaction(df: pd.DataFrame, binary_col: str, use_weights: bool = F
         axis=1,
     ).astype(float)
     X = sm.add_constant(X_cols_df)
-    y = sub[OUTCOME_COL].astype(float)
+    y = sub[outcome_col].astype(float)
 
     kwargs: dict = {}
     if use_weights and "NWEIGHT" in sub.columns:
@@ -203,10 +210,10 @@ def run_ols_interaction(df: pd.DataFrame, binary_col: str, use_weights: bool = F
 # ---------------------------------------------------------------------------
 
 
-def run_within_zone(df: pd.DataFrame, binary_col: str) -> list[dict]:
+def run_within_zone(df: pd.DataFrame, binary_col: str, outcome_col: str = "Heating_EUI_kBtu_sqft") -> list[dict]:
     """Mann-Whitney Central vs. Distributed within each IECC_climate_code."""
     sub = df[df[binary_col].isin(["Central", "Distributed"])].copy()
-    sub = sub[sub[OUTCOME_COL].notna()]
+    sub = sub[sub[outcome_col].notna()]
 
     if "IECC_climate_code" not in sub.columns:
         return [{"error": "IECC_climate_code column not found"}]
@@ -216,8 +223,8 @@ def run_within_zone(df: pd.DataFrame, binary_col: str) -> list[dict]:
 
     for zone in zones:
         zdf = sub[sub["IECC_climate_code"] == zone]
-        c = zdf.loc[zdf[binary_col] == "Central", OUTCOME_COL].dropna().values
-        d = zdf.loc[zdf[binary_col] == "Distributed", OUTCOME_COL].dropna().values
+        c = zdf.loc[zdf[binary_col] == "Central", outcome_col].dropna().values
+        d = zdf.loc[zdf[binary_col] == "Distributed", outcome_col].dropna().values
 
         row: dict = {
             "zone": zone,
@@ -249,9 +256,9 @@ def run_within_zone(df: pd.DataFrame, binary_col: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-def make_scatter(df: pd.DataFrame, binary_col: str, outdir: Path) -> None:
+def make_scatter(df: pd.DataFrame, binary_col: str, outdir: Path, outcome_col: str = "Heating_EUI_kBtu_sqft") -> None:
     sub = df[df[binary_col].isin(["Central", "Distributed"])].copy()
-    sub = sub[sub[OUTCOME_COL].notna()]
+    sub = sub[sub[outcome_col].notna()]
 
     if "YEARMADERANGE" not in sub.columns or sub.empty:
         return
@@ -265,12 +272,13 @@ def make_scatter(df: pd.DataFrame, binary_col: str, outdir: Path) -> None:
     fig, ax = plt.subplots(figsize=(7, 4))
     for label, color in [("Central", "#2196F3"), ("Distributed", "#FF7043")]:
         grp = sub[sub[binary_col] == label]
-        ax.scatter(grp["_vintage"], grp[OUTCOME_COL],
+        ax.scatter(grp["_vintage"], grp[outcome_col],
                    label=f"{label} (n={len(grp)})", color=color, alpha=0.5, s=25)
 
+    short_outcome = outcome_col.replace("_kBtu_sqft", "")
     ax.set_xlabel("YEARMADERANGE (home vintage category)")
-    ax.set_ylabel("Site EUI (kBtu/sqft/yr)")
-    ax.set_title(f"Site EUI vs. Home Vintage\n({sys_label})", fontsize=9)
+    ax.set_ylabel(f"{short_outcome} (kBtu/sqft/yr)")
+    ax.set_title(f"{short_outcome} vs. Home Vintage\n({sys_label})", fontsize=9)
     ax.legend(fontsize=8)
     fig.tight_layout()
 
@@ -323,90 +331,108 @@ def main() -> None:
     all_ols_interact = []
     all_zone = []
 
-    for binary_col in BINARY_COLS:
-        if binary_col not in df.columns:
-            logger.warning("%s not found — skipping", binary_col)
+    # ==================================================================
+    # PRIMARY: heating system type across segment × fuel × outcome grid
+    # ==================================================================
+    binary_col = BINARY_COL
+    sys_label = binary_col.replace("_binary", "")
+
+    for outcome_col in OUTCOME_COLS:
+        short = outcome_col.replace("_kBtu_sqft", "")
+        for seg_key in MF_SEGMENTS:
+            seg_df = filter_segment(df, seg_key)
+            for fuel_key in FUEL_STRATA:
+                fuel_df = filter_fuel(seg_df, fuel_key)
+
+                # Run pooled binary (primary) and explicit only (secondary)
+                for view in ["pooled_binary", "explicit_only"]:
+                    view_df = filter_classification_view(fuel_df, view, binary_col)
+                    label = friendly_label(seg_key, fuel_key, view)
+
+                    print(f"\n{'=' * 70}")
+                    print(f"  {sys_label} | {short} | {label}")
+                    print(f"{'=' * 70}")
+
+                    # --- OLS ---
+                    ols = run_ols(view_df, binary_col, outcome_col=outcome_col, use_weights=args.use_weights)
+                    if "error" in ols:
+                        print(f"    [OLS] {ols['error']}")
+                    else:
+                        sig_str = "✓ SIG" if ols["significant"] else "✗ n.s."
+                        print(
+                            f"    [OLS] n={ols['n']}  coef={ols['coef_distributed']:+.1f}  "
+                            f"p={ols['p_distributed']}  CI=[{ols['ci_low']},{ols['ci_high']}]  "
+                            f"R²={ols['R2']}  → {sig_str}"
+                        )
+                    all_ols.append({
+                        "system_col": sys_label,
+                        "outcome": outcome_col,
+                        "mf_segment": seg_key,
+                        "fuel_stratum": fuel_key,
+                        "classification_view": view,
+                        **{k: v for k, v in ols.items() if k != "summary"},
+                    })
+
+                    # --- OLS + vintage interaction (only for pooled binary, all fuels) ---
+                    if view == "pooled_binary" and fuel_key == "all_fuels":
+                        ols_int = run_ols_interaction(view_df, binary_col, outcome_col=outcome_col, use_weights=args.use_weights)
+                        if "error" in ols_int:
+                            print(f"    [OLS×vintage] {ols_int['error']}")
+                        else:
+                            int_sig = "✓ SIG" if ols_int["interaction_significant"] else "✗ n.s."
+                            print(
+                                f"    [OLS×vintage] n={ols_int['n']}  R²={ols_int['R2']}  "
+                                f"interaction coef={ols_int.get('coef__dist_x_vintage', '?')}  "
+                                f"p={ols_int.get('p__dist_x_vintage', '?')}  → {int_sig}"
+                            )
+                        all_ols_interact.append({
+                            "system_col": sys_label,
+                            "outcome": outcome_col,
+                            "mf_segment": seg_key,
+                            "fuel_stratum": fuel_key,
+                            "classification_view": view,
+                            **{k: v for k, v in ols_int.items() if k != "summary"},
+                        })
+
+                    # --- Within-zone (only pooled binary, all fuels, Heating EUI) ---
+                    if view == "pooled_binary" and fuel_key == "all_fuels" and outcome_col == "Heating_EUI_kBtu_sqft":
+                        zone_rows = run_within_zone(view_df, binary_col, outcome_col=outcome_col)
+                        for zr in zone_rows:
+                            if "error" in zr:
+                                continue
+                            all_zone.append({
+                                "system_col": sys_label,
+                                "outcome": outcome_col,
+                                "mf_segment": seg_key,
+                                **zr,
+                            })
+
+        # Scatter for heating EUI (all MF, pooled binary)
+        make_scatter(df, binary_col, args.outdir, outcome_col=outcome_col)
+
+    # ==================================================================
+    # SECONDARY: cooling / DHW — pooled binary, all MF, all fuels, Site EUI
+    # ==================================================================
+    for bcol in BINARY_COLS_SECONDARY:
+        if bcol not in df.columns:
             continue
-
-        sys_label = binary_col.replace("_binary", "")
-        print(f"\n{'=' * 70}")
-        print(f"  {sys_label}")
-        print(f"{'=' * 70}")
-
-        # --- Strategy A: OLS ---
-        print(f"\n  [OLS] {OUTCOME_COL}")
-        ols = run_ols(df, binary_col, use_weights=args.use_weights)
-        if "error" in ols:
-            print(f"    {ols['error']}")
-        else:
-            sig_str = "✓ SIGNIFICANT" if ols["significant"] else "✗ not significant"
-            print(
-                f"    n={ols['n']},  coef_distributed={ols['coef_distributed']},  "
-                f"p={ols['p_distributed']},  "
-                f"CI=[{ols['ci_low']}, {ols['ci_high']}],  R²={ols['R2']}\n"
-                f"    → {sig_str} (α={ALPHA})\n"
-                f"    Interpretation: Distributed EUI is {ols['coef_distributed']:+.1f} kBtu/sqft/yr "
-                f"relative to Central, after controlling for IECC climate zone, "
-                f"YEARMADERANGE (ordinal 1–8), and log(TOTSQFT_EN)."
-            )
+        slabel = bcol.replace("_binary", "")
+        ols = run_ols(df, bcol, outcome_col="Site_EUI_kBtu_sqft", use_weights=args.use_weights)
         all_ols.append({
-            "system_col": sys_label,
-            "outcome": OUTCOME_COL,
+            "system_col": slabel,
+            "outcome": "Site_EUI_kBtu_sqft",
+            "mf_segment": "all_mf",
+            "fuel_stratum": "all_fuels",
+            "classification_view": "pooled_binary",
             **{k: v for k, v in ols.items() if k != "summary"},
         })
 
-        # --- Strategy A′: OLS with interaction ---
-        print(f"\n  [OLS + vintage interaction] {OUTCOME_COL}")
-        ols_int = run_ols_interaction(df, binary_col, use_weights=args.use_weights)
-        if "error" in ols_int:
-            print(f"    {ols_int['error']}")
-        else:
-            int_sig = "✓ SIGNIFICANT" if ols_int["interaction_significant"] else "✗ not significant"
-            print(
-                f"    n={ols_int['n']},  R²={ols_int['R2']}\n"
-                f"    _distributed          coef={ols_int['coef__distributed']:+.2f}  "
-                f"p={ols_int['p__distributed']}  CI=[{ols_int['ci_low__distributed']}, {ols_int['ci_high__distributed']}]\n"
-                f"    YEARMADERANGE         coef={ols_int['coef_YEARMADERANGE']:+.2f}  "
-                f"p={ols_int['p_YEARMADERANGE']}\n"
-                f"    _dist × vintage       coef={ols_int['coef__dist_x_vintage']:+.2f}  "
-                f"p={ols_int['p__dist_x_vintage']}  "
-                f"CI=[{ols_int['ci_low__dist_x_vintage']}, {ols_int['ci_high__dist_x_vintage']}]\n"
-                f"    → Interaction {int_sig} (α={ALPHA})\n"
-                f"    Interpretation: A {'significant' if ols_int['interaction_significant'] else 'non-significant'} "
-                f"interaction means the system-type EUI gap "
-                f"{'does' if ols_int['interaction_significant'] else 'does NOT'} "
-                f"vary with building vintage."
-            )
-        all_ols_interact.append({
-            "system_col": sys_label,
-            "outcome": OUTCOME_COL,
-            **{k: v for k, v in ols_int.items() if k != "summary"},
-        })
-
-        # --- Strategy B: Within-zone ---
-        print(f"\n  [Within-Climate-Zone] {OUTCOME_COL}")
-        zone_rows = run_within_zone(df, binary_col)
-        for zr in zone_rows:
-            if "error" in zr:
-                print(f"    {zr['error']}")
-                continue
-            sig_str = ("✓ sig" if zr["significant"] else "✗ n.s.") if zr["significant"] is not None else "—"
-            note = f" [{zr['note']}]" if zr["note"] else ""
-            print(
-                f"    zone={zr['zone']:10}  C(n={zr['n_central']}) D(n={zr['n_distributed']})"
-                f"  median C={zr['median_central']}  D={zr['median_distributed']}"
-                f"  p={zr['p_value']}  {sig_str}{note}"
-            )
-            all_zone.append({"system_col": sys_label, "outcome": OUTCOME_COL, **zr})
-
-        # --- Scatter ---
-        make_scatter(df, binary_col, args.outdir)
-
+    # ==================================================================
     # Save results
+    # ==================================================================
     ols_df = pd.DataFrame(all_ols)
     zone_df = pd.DataFrame(all_zone)
 
-    # Multiple-testing note for within-zone tests
     if not zone_df.empty and "p_value" in zone_df.columns:
         tested = zone_df[zone_df["p_value"].notna()]
         n_tests = len(tested)
@@ -419,6 +445,17 @@ def main() -> None:
                 f" → {n_bonf_sig} of {n_tests} remain significant after correction."
             )
             zone_df["bonferroni_significant"] = zone_df["p_value"] < bonferroni_alpha
+
+    # Print OLS summary table
+    print(f"\n{'=' * 70}")
+    print("  OLS RESULTS SUMMARY")
+    print(f"{'=' * 70}")
+    if not ols_df.empty:
+        display = ["system_col", "outcome", "mf_segment", "fuel_stratum",
+                    "classification_view", "n", "coef_distributed", "p_distributed",
+                    "ci_low", "ci_high", "R2", "significant"]
+        display = [c for c in display if c in ols_df.columns]
+        print(ols_df[display].to_string(index=False))
 
     ols_df.to_csv(args.outdir / "04_ols_results.csv", index=False)
     zone_df.to_csv(args.outdir / "04_within_zone_results.csv", index=False)
