@@ -147,7 +147,7 @@ def plot_stacked_bar(
     ax.set_xlabel("% of households")
     ax.set_xlim(0, 115)
     ax.set_title(title, fontsize=11, fontweight="bold")
-    ax.legend(loc="lower right", fontsize=8, title="System Type")
+    ax.legend(fontsize=8, title="System Type", bbox_to_anchor=(1.02, 1), loc="upper left", borderaxespad=0)
     fig.tight_layout()
     fig.savefig(fname, dpi=150, bbox_inches="tight")
     plt.close(fig)

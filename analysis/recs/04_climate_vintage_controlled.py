@@ -279,7 +279,7 @@ def make_scatter(df: pd.DataFrame, binary_col: str, outdir: Path, outcome_col: s
     ax.set_xlabel("YEARMADERANGE (home vintage category)")
     ax.set_ylabel(f"{short_outcome} (kBtu/sqft/yr)")
     ax.set_title(f"{short_outcome} vs. Home Vintage\n({sys_label})", fontsize=9)
-    ax.legend(fontsize=8)
+    ax.legend(fontsize=8, bbox_to_anchor=(1.02, 1), loc="upper left", borderaxespad=0)
     fig.tight_layout()
 
     fname = outdir / f"04_scatter_vintage_{sys_label}.png"
