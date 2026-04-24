@@ -148,9 +148,103 @@ def main() -> None:
         logger.info("No EUI outliers detected (range [%.0f, %.0f]).", EUI_LOW, EUI_HIGH)
 
     # ------------------------------------------------------------------
+    # Derived columns for downstream segment / sensitivity analysis
+    # ------------------------------------------------------------------
+    logger.info("Adding derived analysis columns …")
+
+    # mf_segment: multifamily building-size segment
+    if "TYPEHUQ" in df.columns:
+        df["mf_segment"] = df["TYPEHUQ"].map({3: "2_to_4_units", 4: "5plus_units"})
+    else:
+        df["mf_segment"] = pd.NA
+
+    # unit_size_bin: floor area bins
+    sqft = pd.to_numeric(df.get("TOTSQFT_EN"), errors="coerce")
+    df["unit_size_bin"] = pd.cut(
+        sqft,
+        bins=[0, 750, 1000, 1500, 2000, float("inf")],
+        labels=["<750", "750-999", "1000-1499", "1500-1999", "2000+"],
+        right=False,
+    )
+
+    # heating_classification_mode: explicit / inferred / unknown
+    _MODE_MAP = {
+        "Central": "explicit",
+        "Distributed": "explicit",
+        "Central (inferred)": "inferred",
+        "Distributed (inferred)": "inferred",
+        "Unknown": "unknown",
+    }
+    if "heating_system_type" in df.columns:
+        df["heating_classification_mode"] = df["heating_system_type"].map(_MODE_MAP).fillna("unknown")
+    else:
+        df["heating_classification_mode"] = "unknown"
+
+    # amenity_flag: pool or hot tub present
+    pool = pd.to_numeric(df.get("SWIMPOOL"), errors="coerce") == 1
+    tub = pd.to_numeric(df.get("RECBATH"), errors="coerce") == 1
+    df["amenity_flag"] = pool | tub
+
+    # ev_flag: household owns an electric vehicle
+    ev = pd.to_numeric(df.get("ELECVEH"), errors="coerce") == 1
+    df["ev_flag"] = ev
+
+    # heating_fuel_group: simplified primary heating fuel
+    elwarm = pd.to_numeric(df.get("ELWARM"), errors="coerce") == 1
+    ugwarm = pd.to_numeric(df.get("UGWARM"), errors="coerce") == 1
+    df["heating_fuel_group"] = "other"
+    df.loc[elwarm & ~ugwarm, "heating_fuel_group"] = "electric"
+    df.loc[ugwarm & ~elwarm, "heating_fuel_group"] = "gas"
+    df.loc[elwarm & ugwarm, "heating_fuel_group"] = "both"
+
+    logger.info(
+        "Derived columns added: mf_segment, unit_size_bin, "
+        "heating_classification_mode, amenity_flag, ev_flag, heating_fuel_group"
+    )
+
+    # ------------------------------------------------------------------
     # Coverage report
     # ------------------------------------------------------------------
     _coverage_summary(df)
+
+    # ------------------------------------------------------------------
+    # Metadata summary
+    # ------------------------------------------------------------------
+    _section("Derived column summary")
+    if "mf_segment" in df.columns:
+        print("\n  mf_segment:")
+        print(df["mf_segment"].value_counts(dropna=False).to_string())
+    if "unit_size_bin" in df.columns:
+        print("\n  unit_size_bin:")
+        print(df["unit_size_bin"].value_counts(dropna=False).sort_index().to_string())
+    if "heating_classification_mode" in df.columns:
+        print("\n  heating_classification_mode:")
+        print(df["heating_classification_mode"].value_counts(dropna=False).to_string())
+    if "heating_system_type_binary" in df.columns and "mf_segment" in df.columns:
+        print("\n  heating_system_type_binary × mf_segment:")
+        xtab = pd.crosstab(
+            df["mf_segment"], df["heating_system_type_binary"],
+            margins=True, margins_name="Total", dropna=False,
+        )
+        print(xtab.to_string())
+    print(f"\n  amenity_flag=True : {int(df['amenity_flag'].sum())}")
+    print(f"  ev_flag=True      : {int(df['ev_flag'].sum())}")
+    print(f"\n  heating_fuel_group:")
+    print(df["heating_fuel_group"].value_counts(dropna=False).to_string())
+
+    # Key variable missingness
+    _section("Key variable missingness")
+    _miss_cols = [
+        "TOTALBTU", "TOTALBTUSPH", "TOTSQFT_EN", "TYPEHUQ",
+        "HEATAPT", "EQUIPM", "ELWARM", "UGWARM",
+        "SWIMPOOL", "RECBATH", "ELECVEH",
+        "Heating_EUI_kBtu_sqft", "Site_EUI_kBtu_sqft",
+    ]
+    for col in _miss_cols:
+        if col in df.columns:
+            n_miss = int(df[col].isna().sum())
+            pct = 100.0 * n_miss / len(df) if len(df) else 0
+            print(f"  {col:30s}: {n_miss:5d} missing ({pct:.1f}%)")
 
     # ------------------------------------------------------------------
     # Write output

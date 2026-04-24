@@ -124,7 +124,7 @@ def make_confounding_charts(df: pd.DataFrame, system_col: str, outdir: Path) -> 
         ax.set_title(f"{cat_col} distribution within {system_col}", fontsize=10)
         ax.set_ylabel("Proportion")
         ax.set_xticklabels(xtab.index, rotation=20, ha="right", fontsize=8)
-        ax.legend(loc="upper right", fontsize=7, title=cat_col)
+        ax.legend(fontsize=7, title=cat_col, bbox_to_anchor=(1.02, 1), loc="upper left", borderaxespad=0)
         fig.tight_layout()
 
         fname = outdir / f"02_confounding_{system_col}_{label}.png"

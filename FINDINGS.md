@@ -1,7 +1,7 @@
 # Findings — Multifamily HVAC System Type & Energy Use
 
-> **Last updated:** 2026-04-20  
-> **Status:** Active — update as new analyses land  
+> **Last updated:** 2026-04-24
+> **Status:** Active — update as new analyses land
 > **Datasets:** RECS 2020 (national), RBSA 2022 (Pacific NW)
 
 ---
@@ -116,6 +116,46 @@ Zone 1 (Mild): Central 57.2 vs Distributed 36.1 (p=0.011). Zones 2–3 have insu
 
 ---
 
+## 6b. Explicit-Only Deep Dive — Electric & Gas EUI (RECS, 5+ Unit Buildings)
+
+Because HEATAPT (the explicit central/distributed indicator) is only populated for
+5+ unit buildings (TYPEHUQ = 4), the explicit-only slice is equivalent to the 5+
+unit segment. This gives us the cleanest classification signal.
+
+**Sample:** n = 950 (Central = 415, Distributed = 535)
+
+### Unadjusted (Mann-Whitney U)
+
+| Metric | Median Central | Median Distributed | Δ | p-value | Significant? |
+|--------|---------------|-------------------|---|---------|-------------|
+| Site EUI | 59.80 | 45.48 | −14.32 | <0.001 | **Yes** |
+| Heating EUI | 25.25 | 12.29 | −12.96 | <0.001 | **Yes** |
+| Electric EUI | 17.19 | 26.05 | **+8.86** | <0.001 | **Yes** |
+| Gas EUI | 32.94 | 1.40 | −31.54 | <0.001 | **Yes** |
+
+**Key insight:** Distributed systems show *higher* electric EUI but dramatically
+lower gas EUI. Central systems are overwhelmingly gas-fired (median gas EUI
+32.9 kBtu/sqft/yr), while distributed systems are predominantly electric (median
+gas EUI only 1.4). The net site EUI still favours distributed by ~14 kBtu/sqft/yr.
+
+### By Climate Zone (explicit only, top zones)
+
+| Zone | Metric | Central (med) | n_C | Distributed (med) | n_D | p | Sig? |
+|------|--------|--------------|-----|-------------------|-----|---|------|
+| 4A | Heating EUI | 24.7 | 114 | 13.0 | 134 | <0.001 | **Yes** |
+| 4A | Electric EUI | 19.4 | 114 | 27.5 | 134 | <0.001 | **Yes** |
+| 4A | Gas EUI | 44.9 | 114 | 0.0 | 134 | <0.001 | **Yes** |
+| 5A | Electric EUI | 16.1 | 157 | 19.1 | 112 | 0.005 | **Yes** |
+| 6A | Electric EUI | 11.8 | 53 | 19.7 | 37 | <0.001 | **Yes** |
+
+Zone **4A** (Mid-Atlantic/Southeast) is the only zone with significant
+differences across all three metrics, driven by its large sample and stark
+fuel-type split. Zones **5A** and **6A** show significant electric EUI
+reversals — distributed systems use *more* electricity — consistent with
+the shift from gas-fired central to electric distributed equipment.
+
+---
+
 ## 7. Cross-Dataset Comparison
 
 Both datasets consistently estimate a **negative** OLS coefficient for distributed heating (RECS: −10.3, RBSA: −20.6), suggesting that after controlling for confounders, distributed heating systems are associated with lower Site EUI. The RBSA effect is roughly 2× larger but with 30× less statistical power.
@@ -152,6 +192,11 @@ Despite these differences, the direction of the heating effect is concordant —
 | `outputs/recs/08_forest_recs_vs_rbsa.png` | Forest plot — RECS vs RBSA OLS coefficients |
 | `outputs/recs/08_median_bars_recs_vs_rbsa.png` | Grouped bars — median EUI comparison |
 | `outputs/recs/08_recs_vs_rbsa_summary.csv` | Combined summary table |
-| `outputs/recs/07_*.png` | Presentation plots (5 figures) |
+| `outputs/recs/07_*.png` | Presentation plots (12 figures) |
+| `outputs/recs/07_explicit_electric_gas_eui.png` | Explicit-only Electric & Gas EUI — all MF |
+| `outputs/recs/07_explicit_electric_gas_eui_5plus_units.png` | Explicit-only Electric & Gas EUI — 5+ units |
+| `outputs/recs/07_explicit_eui_by_climate_zone.png` | Explicit-only EUI by climate zone — all MF |
+| `outputs/recs/07_explicit_eui_by_climate_zone_5plus_units.png` | Explicit-only EUI by climate zone — 5+ units |
+| `outputs/recs/heating_sensitivity_matrix.csv` | Sensitivity matrix — all analytical slices |
 | `outputs/rbsa/04_ols_results.csv` | RBSA OLS coefficients |
 | `outputs/rbsa/03_mann_whitney_results.csv` | RBSA Mann-Whitney results |

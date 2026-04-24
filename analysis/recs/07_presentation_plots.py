@@ -36,7 +36,13 @@ import pandas as pd
 from scipy import stats
 
 from src.common.log import get_logger
-from src.datasets.recs.utils import load_curated, filter_unit_type
+from src.datasets.recs.utils import (
+    load_curated,
+    filter_unit_type,
+    filter_segment,
+    filter_fuel,
+    filter_classification_view,
+)
 
 logger = get_logger("recs.07_plots")
 
@@ -201,7 +207,7 @@ def plot_median_comparison(df: pd.DataFrame, outdir: Path) -> None:
     ax.set_ylabel("Median Site EUI (kBtu/sqft/yr)", fontsize=10)
     ax.set_xticks(x)
     ax.set_xticklabels(labels, fontsize=11)
-    ax.legend(fontsize=10)
+    ax.legend(fontsize=10, bbox_to_anchor=(1.02, 1), loc="upper left", borderaxespad=0)
     ax.set_title("Median Site EUI: Central vs. Distributed\n(RECS 2020, Multifamily)", fontsize=12, fontweight="bold")
     ax.yaxis.set_minor_locator(mticker.AutoMinorLocator())
     fig.tight_layout()
@@ -269,7 +275,7 @@ def plot_top_climate_zones(df: pd.DataFrame, outdir: Path, top_n: int = 8) -> No
     ax.set_xlabel("IECC Climate Zone", fontsize=10)
     ax.set_xticks(x)
     ax.set_xticklabels(zones, fontsize=10)
-    ax.legend(fontsize=10)
+    ax.legend(fontsize=10, bbox_to_anchor=(1.02, 1), loc="upper left", borderaxespad=0)
     ax.set_title(
         "Median Site EUI by Climate Zone — Heating System Type\n"
         f"(top {top_n} zones by sample size, * p<.05  ** p<.01  *** p<.001)",
@@ -352,7 +358,7 @@ def plot_fuel_stratified(df: pd.DataFrame, outdir: Path) -> None:
     ax.set_ylabel("Median Site EUI (kBtu/sqft/yr)", fontsize=10)
     ax.set_xticks(x)
     ax.set_xticklabels(labels, fontsize=11)
-    ax.legend(fontsize=10)
+    ax.legend(fontsize=10, bbox_to_anchor=(1.02, 1), loc="upper left", borderaxespad=0)
     ax.set_title(
         "Heating System Type — Median Site EUI by Fuel Stratum\n"
         "(shows fuel-type confounding: gas homes use more site energy)",
@@ -435,6 +441,387 @@ def plot_cz_lollipop(df: pd.DataFrame, outdir: Path, min_n: int = 10) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 6. Heating EUI by central vs distributed, split by MF segment
+# ---------------------------------------------------------------------------
+
+def plot_heating_by_segment(df: pd.DataFrame, outdir: Path) -> None:
+    """Grouped bar: Heating EUI by Central vs Distributed, faceted by mf_segment."""
+    bcol = "heating_system_type_binary"
+    eui = "Heating_EUI_kBtu_sqft"
+    if bcol not in df.columns or eui not in df.columns or "mf_segment" not in df.columns:
+        return
+
+    segments = ["2_to_4_units", "5plus_units"]
+    labels, medians_c, medians_d, ns_c, ns_d, pvals = [], [], [], [], [], []
+
+    for seg in segments:
+        sub = filter_segment(df, seg)
+        c = sub.loc[sub[bcol] == "Central", eui].dropna()
+        d = sub.loc[sub[bcol] == "Distributed", eui].dropna()
+        if len(c) < 2 or len(d) < 2:
+            continue
+        _, p = stats.mannwhitneyu(c, d, alternative="two-sided")
+        labels.append(seg.replace("_", " "))
+        medians_c.append(c.median())
+        medians_d.append(d.median())
+        ns_c.append(len(c))
+        ns_d.append(len(d))
+        pvals.append(p)
+
+    if not labels:
+        return
+
+    x = np.arange(len(labels))
+    width = 0.32
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+
+    bars_c = ax.bar(x - width / 2, medians_c, width, label="Central", color=C_CENTRAL, edgecolor="white")
+    bars_d = ax.bar(x + width / 2, medians_d, width, label="Distributed", color=C_DISTRIBUTED, edgecolor="white")
+
+    for bar, n in zip(bars_c, ns_c):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.5,
+                f"n={n}", ha="center", va="bottom", fontsize=8, color="dimgray")
+    for bar, n in zip(bars_d, ns_d):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.5,
+                f"n={n}", ha="center", va="bottom", fontsize=8, color="dimgray")
+
+    for i, p in enumerate(pvals):
+        y_max = max(medians_c[i], medians_d[i])
+        sig_text = "***" if p < 0.001 else ("**" if p < 0.01 else ("*" if p < 0.05 else "n.s."))
+        ax.text(x[i], y_max + 4, sig_text, ha="center", va="bottom", fontsize=11, fontweight="bold")
+
+    ax.set_ylabel("Median Heating EUI (kBtu/sqft/yr)", fontsize=10)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=11)
+    ax.legend(fontsize=10, bbox_to_anchor=(1.02, 1), loc="upper left", borderaxespad=0)
+    ax.set_title(
+        "Heating EUI: Central vs. Distributed by MF Segment\n(RECS 2020 Multifamily)",
+        fontsize=12, fontweight="bold",
+    )
+    fig.tight_layout()
+
+    fname = outdir / "07_heating_eui_by_segment.png"
+    fig.savefig(fname, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Saved %s", fname)
+
+
+# ---------------------------------------------------------------------------
+# 7. Heating EUI by fuel within 5+ unit buildings
+# ---------------------------------------------------------------------------
+
+def plot_heating_by_fuel_5plus(df: pd.DataFrame, outdir: Path) -> None:
+    """Grouped bars: Heating EUI Central vs Distributed for 5+ unit, by fuel."""
+    bcol = "heating_system_type_binary"
+    eui = "Heating_EUI_kBtu_sqft"
+    if bcol not in df.columns or eui not in df.columns:
+        return
+
+    seg_df = filter_segment(df, "5plus_units")
+
+    strata = [
+        ("All Fuels", seg_df),
+        ("Electric Only", filter_fuel(seg_df, "electric")),
+        ("Gas Only", filter_fuel(seg_df, "gas")),
+    ]
+
+    labels, medians_c, medians_d, ns_c, ns_d, pvals = [], [], [], [], [], []
+
+    for slabel, sdf in strata:
+        if sdf.empty:
+            continue
+        c = sdf.loc[sdf[bcol] == "Central", eui].dropna()
+        d = sdf.loc[sdf[bcol] == "Distributed", eui].dropna()
+        if len(c) < 2 or len(d) < 2:
+            continue
+        _, p = stats.mannwhitneyu(c, d, alternative="two-sided")
+        labels.append(slabel)
+        medians_c.append(c.median())
+        medians_d.append(d.median())
+        ns_c.append(len(c))
+        ns_d.append(len(d))
+        pvals.append(p)
+
+    if not labels:
+        return
+
+    x = np.arange(len(labels))
+    width = 0.32
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+
+    bars_c = ax.bar(x - width / 2, medians_c, width, label="Central", color=C_CENTRAL, edgecolor="white")
+    bars_d = ax.bar(x + width / 2, medians_d, width, label="Distributed", color=C_DISTRIBUTED, edgecolor="white")
+
+    for bar, n in zip(bars_c, ns_c):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.3,
+                f"n={n}", ha="center", va="bottom", fontsize=8, color="dimgray")
+    for bar, n in zip(bars_d, ns_d):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.3,
+                f"n={n}", ha="center", va="bottom", fontsize=8, color="dimgray")
+
+    for i, p in enumerate(pvals):
+        y_max = max(medians_c[i], medians_d[i])
+        sig_text = "***" if p < 0.001 else ("**" if p < 0.01 else ("*" if p < 0.05 else "n.s."))
+        ax.text(x[i], y_max + 3, sig_text, ha="center", va="bottom", fontsize=11, fontweight="bold")
+
+    ax.set_ylabel("Median Heating EUI (kBtu/sqft/yr)", fontsize=10)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=11)
+    ax.legend(fontsize=10, bbox_to_anchor=(1.02, 1), loc="upper left", borderaxespad=0)
+    ax.set_title(
+        "Heating EUI by Fuel — 5+ Unit MF Buildings\n"
+        "Central vs. Distributed (RECS 2020)",
+        fontsize=12, fontweight="bold",
+    )
+    fig.tight_layout()
+
+    fname = outdir / "07_heating_eui_fuel_5plus.png"
+    fig.savefig(fname, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Saved %s", fname)
+
+
+# ---------------------------------------------------------------------------
+# 8. Explicit vs Inferred sensitivity comparison
+# ---------------------------------------------------------------------------
+
+def plot_explicit_vs_inferred(df: pd.DataFrame, outdir: Path) -> None:
+    """Show how Heating EUI results differ across classification views."""
+    bcol = "heating_system_type_binary"
+    eui = "Heating_EUI_kBtu_sqft"
+    if bcol not in df.columns or eui not in df.columns:
+        return
+
+    views = [
+        ("Pooled Binary", "pooled_binary"),
+        ("Explicit Only", "explicit_only"),
+        ("Inferred Only", "inferred_only"),
+    ]
+
+    labels, medians_c, medians_d, ns_c, ns_d = [], [], [], [], []
+
+    for vlabel, vkey in views:
+        vdf = filter_classification_view(df, vkey, bcol)
+        c = vdf.loc[vdf[bcol] == "Central", eui].dropna()
+        d = vdf.loc[vdf[bcol] == "Distributed", eui].dropna()
+        if len(c) < 1 and len(d) < 1:
+            continue
+        labels.append(vlabel)
+        medians_c.append(c.median() if len(c) else 0)
+        medians_d.append(d.median() if len(d) else 0)
+        ns_c.append(len(c))
+        ns_d.append(len(d))
+
+    if not labels:
+        return
+
+    x = np.arange(len(labels))
+    width = 0.32
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+
+    ax.bar(x - width / 2, medians_c, width, label="Central", color=C_CENTRAL, edgecolor="white")
+    ax.bar(x + width / 2, medians_d, width, label="Distributed", color=C_DISTRIBUTED, edgecolor="white")
+
+    for i in range(len(labels)):
+        ax.text(x[i] - width / 2, medians_c[i] + 0.3, f"n={ns_c[i]}",
+                ha="center", va="bottom", fontsize=8, color="dimgray")
+        ax.text(x[i] + width / 2, medians_d[i] + 0.3, f"n={ns_d[i]}",
+                ha="center", va="bottom", fontsize=8, color="dimgray")
+
+    ax.set_ylabel("Median Heating EUI (kBtu/sqft/yr)", fontsize=10)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=11)
+    ax.legend(fontsize=10, bbox_to_anchor=(1.02, 1), loc="upper left", borderaxespad=0)
+    ax.set_title(
+        "Heating EUI by Classification View\n"
+        "How much depends on explicit vs. inferred labels?",
+        fontsize=12, fontweight="bold",
+    )
+    fig.tight_layout()
+
+    fname = outdir / "07_explicit_vs_inferred.png"
+    fig.savefig(fname, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Saved %s", fname)
+
+
+# ---------------------------------------------------------------------------
+# 9. Explicit-only deep dive — Electric EUI and Gas EUI
+# ---------------------------------------------------------------------------
+
+def plot_explicit_electric_gas_eui(
+    df: pd.DataFrame, outdir: Path, segment: str = "all_mf",
+) -> None:
+    """Grouped bars: Electric EUI and Gas EUI for explicitly classified systems."""
+    bcol = "heating_system_type_binary"
+    if bcol not in df.columns:
+        return
+
+    src = filter_segment(df, segment) if segment != "all_mf" else df
+
+    eui_metrics = [
+        ("Electric_EUI_kBtu_sqft", "Electric EUI"),
+        ("Gas_EUI_kBtu_sqft", "Natural Gas EUI"),
+    ]
+    eui_metrics = [(col, lbl) for col, lbl in eui_metrics if col in src.columns]
+    if not eui_metrics:
+        return
+
+    explicit = filter_classification_view(src, "explicit_only", bcol)
+    if len(explicit) < 10:
+        logger.warning("Too few explicit rows (%d) — skipping explicit EUI deep dive", len(explicit))
+        return
+
+    seg_label = "5+ Unit MF" if segment == "5plus_units" else "All MF"
+    fig, axes = plt.subplots(1, len(eui_metrics), figsize=(6.5 * len(eui_metrics), 5))
+    if len(eui_metrics) == 1:
+        axes = [axes]
+
+    for ax, (eui_col, eui_label) in zip(axes, eui_metrics):
+        c = explicit.loc[explicit[bcol] == "Central", eui_col].dropna()
+        d = explicit.loc[explicit[bcol] == "Distributed", eui_col].dropna()
+        if len(c) < 2 or len(d) < 2:
+            ax.set_visible(False)
+            continue
+
+        _, p = stats.mannwhitneyu(c, d, alternative="two-sided")
+
+        x = np.arange(2)
+        width = 0.5
+        bars = ax.bar(x, [c.median(), d.median()], width,
+                       color=[C_CENTRAL, C_DISTRIBUTED], edgecolor="white")
+
+        ax.text(0, c.median() + 0.3, f"n={len(c)}\nmed={c.median():.1f}",
+                ha="center", va="bottom", fontsize=9, color="dimgray")
+        ax.text(1, d.median() + 0.3, f"n={len(d)}\nmed={d.median():.1f}",
+                ha="center", va="bottom", fontsize=9, color="dimgray")
+
+        sig_text = "***" if p < 0.001 else ("**" if p < 0.01 else ("*" if p < 0.05 else "n.s."))
+        y_max = max(c.median(), d.median())
+        ax.text(0.5, y_max * 1.15, f"{sig_text}\np={p:.4f}", ha="center", va="bottom",
+                fontsize=10, fontweight="bold")
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(["Central", "Distributed"], fontsize=11)
+        ax.set_ylabel(f"{eui_label} (kBtu/sqft/yr)", fontsize=10)
+        ax.set_title(f"{eui_label}", fontsize=12, fontweight="bold")
+        ax.yaxis.set_minor_locator(mticker.AutoMinorLocator())
+
+    fig.suptitle(
+        f"Explicit Classifications Only — Electric & Gas EUI\n"
+        f"Central vs. Distributed (RECS 2020, {seg_label})",
+        fontsize=13, fontweight="bold", y=1.02,
+    )
+    fig.tight_layout()
+
+    suffix = f"_{segment}" if segment != "all_mf" else ""
+    fname = outdir / f"07_explicit_electric_gas_eui{suffix}.png"
+    fig.savefig(fname, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Saved %s", fname)
+
+
+# ---------------------------------------------------------------------------
+# 10. Explicit-only — EUI metrics by IECC climate zone
+# ---------------------------------------------------------------------------
+
+def plot_explicit_eui_by_climate_zone(
+    df: pd.DataFrame, outdir: Path, top_n: int = 8, segment: str = "all_mf",
+) -> None:
+    """Multi-panel: Heating, Electric, and Gas EUI by climate zone, explicit only."""
+    bcol = "heating_system_type_binary"
+    cz_col = "IECC_climate_code"
+    if bcol not in df.columns or cz_col not in df.columns:
+        return
+
+    src = filter_segment(df, segment) if segment != "all_mf" else df
+
+    eui_metrics = [
+        ("Heating_EUI_kBtu_sqft", "Heating EUI"),
+        ("Electric_EUI_kBtu_sqft", "Electric EUI"),
+        ("Gas_EUI_kBtu_sqft", "Natural Gas EUI"),
+    ]
+    eui_metrics = [(col, lbl) for col, lbl in eui_metrics if col in src.columns]
+    if not eui_metrics:
+        return
+
+    explicit = filter_classification_view(src, "explicit_only", bcol)
+    if len(explicit) < 10:
+        logger.warning("Too few explicit rows (%d) — skipping climate zone EUI", len(explicit))
+        return
+
+    seg_label = "5+ Unit MF" if segment == "5plus_units" else "All MF"
+
+    # Top N zones by explicit-only count
+    zone_counts = explicit[cz_col].value_counts()
+    top_zones = zone_counts.head(top_n).index.tolist()
+    explicit = explicit[explicit[cz_col].isin(top_zones)]
+    zones = sorted(top_zones)
+
+    n_metrics = len(eui_metrics)
+    fig, axes = plt.subplots(n_metrics, 1, figsize=(11, 5 * n_metrics), sharex=True)
+    if n_metrics == 1:
+        axes = [axes]
+
+    for ax, (eui_col, eui_label) in zip(axes, eui_metrics):
+        medians_c, medians_d, ns_c, ns_d, pvals = [], [], [], [], []
+
+        for zone in zones:
+            zdf = explicit[explicit[cz_col] == zone]
+            c = zdf.loc[zdf[bcol] == "Central", eui_col].dropna()
+            d = zdf.loc[zdf[bcol] == "Distributed", eui_col].dropna()
+            medians_c.append(c.median() if len(c) else 0)
+            medians_d.append(d.median() if len(d) else 0)
+            ns_c.append(len(c))
+            ns_d.append(len(d))
+            if len(c) >= 2 and len(d) >= 2:
+                _, p = stats.mannwhitneyu(c, d, alternative="two-sided")
+                pvals.append(p)
+            else:
+                pvals.append(np.nan)
+
+        x = np.arange(len(zones))
+        width = 0.35
+
+        ax.bar(x - width / 2, medians_c, width, label="Central", color=C_CENTRAL, edgecolor="white")
+        ax.bar(x + width / 2, medians_d, width, label="Distributed", color=C_DISTRIBUTED, edgecolor="white")
+
+        for i in range(len(zones)):
+            ax.text(x[i] - width / 2, medians_c[i] + 0.3, f"n={ns_c[i]}",
+                    ha="center", va="bottom", fontsize=7, color="dimgray")
+            ax.text(x[i] + width / 2, medians_d[i] + 0.3, f"n={ns_d[i]}",
+                    ha="center", va="bottom", fontsize=7, color="dimgray")
+
+            if not np.isnan(pvals[i]) and pvals[i] < ALPHA:
+                y_max = max(medians_c[i], medians_d[i])
+                sig = "***" if pvals[i] < 0.001 else ("**" if pvals[i] < 0.01 else "*")
+                ax.text(x[i], y_max + 2, sig, ha="center", va="bottom",
+                        fontsize=10, fontweight="bold", color="#D32F2F")
+
+        ax.set_ylabel(f"Median {eui_label}\n(kBtu/sqft/yr)", fontsize=10)
+        ax.set_title(f"{eui_label}", fontsize=11, fontweight="bold")
+        ax.legend(fontsize=9, bbox_to_anchor=(1.02, 1), loc="upper left", borderaxespad=0)
+        ax.yaxis.set_minor_locator(mticker.AutoMinorLocator())
+
+    axes[-1].set_xticks(x)
+    axes[-1].set_xticklabels(zones, fontsize=10)
+    axes[-1].set_xlabel("IECC Climate Zone", fontsize=10)
+
+    fig.suptitle(
+        f"Explicit Classifications Only — EUI by Climate Zone\n"
+        f"Central vs. Distributed, {seg_label} (top {top_n} zones, * p<.05  ** p<.01  *** p<.001)",
+        fontsize=13, fontweight="bold", y=1.01,
+    )
+    fig.tight_layout()
+
+    suffix = f"_{segment}" if segment != "all_mf" else ""
+    fname = outdir / f"07_explicit_eui_by_climate_zone{suffix}.png"
+    fig.savefig(fname, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Saved %s", fname)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -453,11 +840,22 @@ def main() -> None:
     df = filter_unit_type(df, args.unit_type)
     logger.info("Loaded %d rows (unit_type=%s)", len(df), args.unit_type)
 
+    # Existing plots (backward compatible)
     plot_forest(df, args.outdir)
     plot_median_comparison(df, args.outdir)
     plot_top_climate_zones(df, args.outdir)
     plot_fuel_stratified(df, args.outdir)
     plot_cz_lollipop(df, args.outdir)
+
+    # Heating-focused plots
+    plot_heating_by_segment(df, args.outdir)
+    plot_heating_by_fuel_5plus(df, args.outdir)
+    plot_explicit_vs_inferred(df, args.outdir)
+
+    # Explicit-only deep dive (all MF + 5+ units)
+    for seg in ("all_mf", "5plus_units"):
+        plot_explicit_electric_gas_eui(df, args.outdir, segment=seg)
+        plot_explicit_eui_by_climate_zone(df, args.outdir, segment=seg)
 
     logger.info("All presentation plots saved to %s", args.outdir)
 

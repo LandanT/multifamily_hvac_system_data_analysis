@@ -133,7 +133,7 @@ def plot_forest(recs_ols: pd.DataFrame, rbsa_ols: pd.DataFrame, outdir: Path) ->
         Line2D([0], [0], marker="o", color="w", markerfacecolor=C_RBSA, markersize=8, label="RBSA 2022"),
         Line2D([0], [0], marker="o", color="w", markerfacecolor="#BDBDBD", markersize=8, label="Not significant"),
     ]
-    ax.legend(handles=handles, loc="lower right", fontsize=8)
+    ax.legend(handles=handles, fontsize=8, bbox_to_anchor=(1.02, 1), loc="upper left", borderaxespad=0)
 
     fig.tight_layout()
     fname = outdir / "08_forest_recs_vs_rbsa.png"
@@ -218,7 +218,7 @@ def plot_median_bars(recs_mw: pd.DataFrame, rbsa_mw: pd.DataFrame, outdir: Path)
         ax.set_xticklabels(sub["dataset"].values, fontsize=11)
         ax.set_ylabel("Median Site EUI (kBtu/sqft/yr)", fontsize=10)
         ax.set_title(f"{sys_type} System Type", fontsize=12, fontweight="bold")
-        ax.legend(fontsize=9)
+        ax.legend(fontsize=9, bbox_to_anchor=(1.02, 1), loc="upper left", borderaxespad=0)
 
     fig.suptitle(
         "Median Site EUI: Central vs Distributed\nRECS 2020 (national) vs RBSA 2022 (Pacific NW)",
