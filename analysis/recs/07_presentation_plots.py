@@ -120,7 +120,7 @@ def plot_forest(df: pd.DataFrame, outdir: Path) -> None:
         sig = "**" if r["pval"] < 0.01 else ("*" if r["pval"] < 0.05 else "")
         ax.text(
             r["ci_hi"] + 0.5, i,
-            f'  {r["coef"]:+.1f}  (p={r["pval"]:.3f}){sig}   n={r["n"]}',
+            f'  {r["coef"]:+.1f}  (p={r["pval"]:.3f})   n={r["n"]}',
             va="center", fontsize=9,
         )
 
@@ -137,7 +137,7 @@ def plot_forest(df: pd.DataFrame, outdir: Path) -> None:
     fig.tight_layout()
 
     fname = outdir / "07_forest_ols_coefficients.png"
-    fig.savefig(fname, dpi=180, bbox_inches="tight")
+    fig.savefig(fname, dpi=200, bbox_inches="tight")
     plt.close(fig)
     logger.info("Saved %s", fname)
 
@@ -173,7 +173,7 @@ def plot_median_comparison(df: pd.DataFrame, outdir: Path) -> None:
 
     x = np.arange(len(labels))
     width = 0.32
-    fig, ax = plt.subplots(figsize=(7, 4.5))
+    fig, ax = plt.subplots(figsize=(7, 6.3))
 
     bars_c = ax.bar(x - width / 2, medians_c, width, label="Central", color=C_CENTRAL, edgecolor="white")
     bars_d = ax.bar(x + width / 2, medians_d, width, label="Distributed", color=C_DISTRIBUTED, edgecolor="white")
@@ -186,23 +186,10 @@ def plot_median_comparison(df: pd.DataFrame, outdir: Path) -> None:
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() - 2,
                 f"n={n}", ha="center", va="top", fontsize=8, color="white", fontweight="bold")
 
-    # Significance brackets
+    # p-value annotations (no brackets)
     for i, p in enumerate(pvals):
         y_max = max(medians_c[i], medians_d[i])
-        bracket_y = y_max + 3
-        if p < 0.001:
-            sig_text = "***"
-        elif p < 0.01:
-            sig_text = "**"
-        elif p < 0.05:
-            sig_text = "*"
-        else:
-            sig_text = "n.s."
-
-        ax.plot([x[i] - width / 2, x[i] - width / 2, x[i] + width / 2, x[i] + width / 2],
-                [bracket_y, bracket_y + 1.5, bracket_y + 1.5, bracket_y],
-                color="black", linewidth=0.8)
-        ax.text(x[i], bracket_y + 2, sig_text, ha="center", va="bottom", fontsize=10, fontweight="bold")
+        ax.text(x[i], y_max + 3, f"p={p:.3f}", ha="center", va="bottom", fontsize=9, color="dimgray")
 
     ax.set_ylabel("Median Site EUI (kBtu/sqft/yr)", fontsize=10)
     ax.set_xticks(x)
@@ -213,7 +200,7 @@ def plot_median_comparison(df: pd.DataFrame, outdir: Path) -> None:
     fig.tight_layout()
 
     fname = outdir / "07_median_eui_by_system_type.png"
-    fig.savefig(fname, dpi=180, bbox_inches="tight")
+    fig.savefig(fname, dpi=200, bbox_inches="tight")
     plt.close(fig)
     logger.info("Saved %s", fname)
 
@@ -267,9 +254,8 @@ def plot_top_climate_zones(df: pd.DataFrame, outdir: Path, top_n: int = 8) -> No
 
         if not np.isnan(pvals[i]) and pvals[i] < ALPHA:
             y_max = max(medians_c[i], medians_d[i])
-            sig = "***" if pvals[i] < 0.001 else ("**" if pvals[i] < 0.01 else "*")
-            ax.text(x[i], y_max + 4, sig, ha="center", va="bottom",
-                    fontsize=11, fontweight="bold", color="#D32F2F")
+            ax.text(x[i], y_max + 4, f"p={pvals[i]:.3f}", ha="center", va="bottom",
+                    fontsize=8, color="#D32F2F")
 
     ax.set_ylabel("Median Site EUI (kBtu/sqft/yr)", fontsize=10)
     ax.set_xlabel("IECC Climate Zone", fontsize=10)
@@ -277,14 +263,14 @@ def plot_top_climate_zones(df: pd.DataFrame, outdir: Path, top_n: int = 8) -> No
     ax.set_xticklabels(zones, fontsize=10)
     ax.legend(fontsize=10, bbox_to_anchor=(1.02, 1), loc="upper left", borderaxespad=0)
     ax.set_title(
-        "Median Site EUI by Climate Zone — Heating System Type\n"
-        f"(top {top_n} zones by sample size, * p<.05  ** p<.01  *** p<.001)",
+        "Median Site EUI by Climate Zone \u2014 Heating System Type\n"
+        f"(top {top_n} zones by sample size)",
         fontsize=11, fontweight="bold",
     )
     fig.tight_layout()
 
     fname = outdir / "07_climate_zone_heating_comparison.png"
-    fig.savefig(fname, dpi=180, bbox_inches="tight")
+    fig.savefig(fname, dpi=200, bbox_inches="tight")
     plt.close(fig)
     logger.info("Saved %s", fname)
 
@@ -420,7 +406,7 @@ def plot_cz_lollipop(df: pd.DataFrame, outdir: Path, min_n: int = 10) -> None:
         side = "left" if r["diff"] >= 0 else "right"
         ha = "left" if r["diff"] >= 0 else "right"
         offset = 0.8 if r["diff"] >= 0 else -0.8
-        sig_label = f'n={r["n"]}  p={r["p"]:.3f}' + (" *" if r["sig"] else "")
+        sig_label = f'n={r["n"]}  p={r["p"]:.3f}'
         ax.text(r["diff"] + offset, i, sig_label, va="center", ha=ha, fontsize=7.5)
 
     ax.axvline(0, color="black", linewidth=0.8, linestyle="--", alpha=0.6)
@@ -435,7 +421,7 @@ def plot_cz_lollipop(df: pd.DataFrame, outdir: Path, min_n: int = 10) -> None:
     fig.tight_layout()
 
     fname = outdir / "07_climate_zone_lollipop.png"
-    fig.savefig(fname, dpi=180, bbox_inches="tight")
+    fig.savefig(fname, dpi=200, bbox_inches="tight")
     plt.close(fig)
     logger.info("Saved %s", fname)
 
@@ -473,7 +459,7 @@ def plot_heating_by_segment(df: pd.DataFrame, outdir: Path) -> None:
 
     x = np.arange(len(labels))
     width = 0.32
-    fig, ax = plt.subplots(figsize=(7, 4.5))
+    fig, ax = plt.subplots(figsize=(9, 5))
 
     bars_c = ax.bar(x - width / 2, medians_c, width, label="Central", color=C_CENTRAL, edgecolor="white")
     bars_d = ax.bar(x + width / 2, medians_d, width, label="Distributed", color=C_DISTRIBUTED, edgecolor="white")
@@ -487,8 +473,7 @@ def plot_heating_by_segment(df: pd.DataFrame, outdir: Path) -> None:
 
     for i, p in enumerate(pvals):
         y_max = max(medians_c[i], medians_d[i])
-        sig_text = "***" if p < 0.001 else ("**" if p < 0.01 else ("*" if p < 0.05 else "n.s."))
-        ax.text(x[i], y_max + 4, sig_text, ha="center", va="bottom", fontsize=11, fontweight="bold")
+        ax.text(x[i], y_max + 3, f"p={p:.3f}", ha="center", va="bottom", fontsize=9, color="dimgray")
 
     ax.set_ylabel("Median Heating EUI (kBtu/sqft/yr)", fontsize=10)
     ax.set_xticks(x)
@@ -501,7 +486,7 @@ def plot_heating_by_segment(df: pd.DataFrame, outdir: Path) -> None:
     fig.tight_layout()
 
     fname = outdir / "07_heating_eui_by_segment.png"
-    fig.savefig(fname, dpi=180, bbox_inches="tight")
+    fig.savefig(fname, dpi=200, bbox_inches="tight")
     plt.close(fig)
     logger.info("Saved %s", fname)
 
@@ -640,7 +625,7 @@ def plot_explicit_vs_inferred(df: pd.DataFrame, outdir: Path) -> None:
     fig.tight_layout()
 
     fname = outdir / "07_explicit_vs_inferred.png"
-    fig.savefig(fname, dpi=180, bbox_inches="tight")
+    fig.savefig(fname, dpi=200, bbox_inches="tight")
     plt.close(fig)
     logger.info("Saved %s", fname)
 
@@ -696,10 +681,10 @@ def plot_explicit_electric_gas_eui(
         ax.text(1, d.median() + 0.3, f"n={len(d)}\nmed={d.median():.1f}",
                 ha="center", va="bottom", fontsize=9, color="dimgray")
 
-        sig_text = "***" if p < 0.001 else ("**" if p < 0.01 else ("*" if p < 0.05 else "n.s."))
+        sig_text = f"p={p:.4f}"
         y_max = max(c.median(), d.median())
-        ax.text(0.5, y_max * 1.15, f"{sig_text}\np={p:.4f}", ha="center", va="bottom",
-                fontsize=10, fontweight="bold")
+        ax.text(0.5, y_max * 1.15, sig_text, ha="center", va="bottom",
+                fontsize=9, color="dimgray")
 
         ax.set_xticks(x)
         ax.set_xticklabels(["Central", "Distributed"], fontsize=11)
@@ -716,7 +701,7 @@ def plot_explicit_electric_gas_eui(
 
     suffix = f"_{segment}" if segment != "all_mf" else ""
     fname = outdir / f"07_explicit_electric_gas_eui{suffix}.png"
-    fig.savefig(fname, dpi=180, bbox_inches="tight")
+    fig.savefig(fname, dpi=200, bbox_inches="tight")
     plt.close(fig)
     logger.info("Saved %s", fname)
 
@@ -759,7 +744,7 @@ def plot_explicit_eui_by_climate_zone(
     zones = sorted(top_zones)
 
     n_metrics = len(eui_metrics)
-    fig, axes = plt.subplots(n_metrics, 1, figsize=(11, 5 * n_metrics), sharex=True)
+    fig, axes = plt.subplots(n_metrics, 1, figsize=(9.6, 4.5 * n_metrics), sharex=True)
     if n_metrics == 1:
         axes = [axes]
 
@@ -794,9 +779,8 @@ def plot_explicit_eui_by_climate_zone(
 
             if not np.isnan(pvals[i]) and pvals[i] < ALPHA:
                 y_max = max(medians_c[i], medians_d[i])
-                sig = "***" if pvals[i] < 0.001 else ("**" if pvals[i] < 0.01 else "*")
-                ax.text(x[i], y_max + 2, sig, ha="center", va="bottom",
-                        fontsize=10, fontweight="bold", color="#D32F2F")
+                ax.text(x[i], y_max + 2, f"p={pvals[i]:.3f}", ha="center", va="bottom",
+                        fontsize=7, color="#D32F2F")
 
         ax.set_ylabel(f"Median {eui_label}\n(kBtu/sqft/yr)", fontsize=10)
         ax.set_title(f"{eui_label}", fontsize=11, fontweight="bold")
@@ -809,14 +793,153 @@ def plot_explicit_eui_by_climate_zone(
 
     fig.suptitle(
         f"Explicit Classifications Only — EUI by Climate Zone\n"
-        f"Central vs. Distributed, {seg_label} (top {top_n} zones, * p<.05  ** p<.01  *** p<.001)",
+        f"Central vs. Distributed, {seg_label} (top {top_n} zones)",
         fontsize=13, fontweight="bold", y=1.01,
     )
     fig.tight_layout()
 
     suffix = f"_{segment}" if segment != "all_mf" else ""
     fname = outdir / f"07_explicit_eui_by_climate_zone{suffix}.png"
-    fig.savefig(fname, dpi=180, bbox_inches="tight")
+    fig.savefig(fname, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Saved %s", fname)
+
+
+# ---------------------------------------------------------------------------
+# 11. Utility payment structure — EUI by who pays the bill
+# ---------------------------------------------------------------------------
+
+# ELPAY/NGPAY codes: 1=household pays, 2=included in rent, 3=some/some, 99=other, -2=N/A
+_PAY_LABELS = {1: "Household Pays", 2: "Included in Rent", 3: "Split"}
+_PAY_FUELS = [
+    ("ELPAY", "Electricity", "Electric_EUI_kBtu_sqft"),
+    ("NGPAY", "Natural Gas", "Gas_EUI_kBtu_sqft"),
+]
+
+
+def plot_utility_payment_eui(df: pd.DataFrame, outdir: Path) -> None:
+    """Grouped bar: EUI by who pays the utility bill (household vs included in rent)."""
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+    for ax, (pay_col, fuel_label, eui_col) in zip(axes, _PAY_FUELS):
+        if pay_col not in df.columns or eui_col not in df.columns:
+            ax.set_visible(False)
+            continue
+
+        sub = df[df[pay_col].isin([1, 2, 3]) & df[eui_col].notna()].copy()
+        sub["_pay_label"] = sub[pay_col].map(_PAY_LABELS)
+
+        groups = ["Household Pays", "Included in Rent", "Split"]
+        groups = [g for g in groups if g in sub["_pay_label"].values]
+
+        medians, counts = [], []
+        for g in groups:
+            vals = sub.loc[sub["_pay_label"] == g, eui_col].dropna()
+            medians.append(vals.median())
+            counts.append(len(vals))
+
+        x = np.arange(len(groups))
+        colors = ["#4CAF50", "#FF9800", "#9E9E9E"][:len(groups)]
+        bars = ax.bar(x, medians, 0.5, color=colors, edgecolor="white")
+
+        for i, (med, n) in enumerate(zip(medians, counts)):
+            ax.text(i, med + 0.3, f"n={n}\nmed={med:.1f}",
+                    ha="center", va="bottom", fontsize=8, color="dimgray")
+
+        # Mann-Whitney: household pays vs included in rent
+        hp = sub.loc[sub["_pay_label"] == "Household Pays", eui_col].dropna()
+        ir = sub.loc[sub["_pay_label"] == "Included in Rent", eui_col].dropna()
+        if len(hp) >= 2 and len(ir) >= 2:
+            _, p = stats.mannwhitneyu(hp, ir, alternative="two-sided")
+            y_max = max(hp.median(), ir.median())
+            ax.text(0.5, y_max * 1.15, f"p={p:.4f}",
+                    ha="center", va="bottom", fontsize=9, color="dimgray")
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(groups, fontsize=10)
+        ax.set_ylabel(f"{fuel_label} EUI (kBtu/sqft/yr)", fontsize=10)
+        ax.set_title(f"Who Pays for {fuel_label}?", fontsize=12, fontweight="bold")
+        ax.yaxis.set_minor_locator(mticker.AutoMinorLocator())
+
+    fig.suptitle(
+        "EUI by Utility Payment Structure\n(RECS 2020 Multifamily)",
+        fontsize=13, fontweight="bold", y=1.02,
+    )
+    fig.tight_layout()
+
+    fname = outdir / "07_utility_payment_eui.png"
+    fig.savefig(fname, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Saved %s", fname)
+
+
+def plot_utility_payment_by_system_type(df: pd.DataFrame, outdir: Path) -> None:
+    """Faceted: EUI by system type × payment structure for electric and gas."""
+    bcol = "heating_system_type_binary"
+    if bcol not in df.columns:
+        return
+
+    eui_metrics = [
+        ("Site_EUI_kBtu_sqft", "Site EUI"),
+        ("Heating_EUI_kBtu_sqft", "Heating EUI"),
+        ("Electric_EUI_kBtu_sqft", "Electric EUI"),
+        ("Gas_EUI_kBtu_sqft", "Gas EUI"),
+    ]
+    eui_metrics = [(c, l) for c, l in eui_metrics if c in df.columns]
+    if not eui_metrics:
+        return
+
+    # Use ELPAY as primary payment indicator (most complete)
+    pay_col = "ELPAY"
+    if pay_col not in df.columns:
+        return
+
+    sub = df[df[pay_col].isin([1, 2]) & df[bcol].isin(["Central", "Distributed"])].copy()
+    sub["_pay"] = sub[pay_col].map({1: "Pays Own", 2: "In Rent"})
+
+    combos = [
+        ("Central", "Pays Own"),
+        ("Central", "In Rent"),
+        ("Distributed", "Pays Own"),
+        ("Distributed", "In Rent"),
+    ]
+    combo_labels = ["Central\nPays Own", "Central\nIn Rent",
+                    "Distributed\nPays Own", "Distributed\nIn Rent"]
+    combo_colors = [C_CENTRAL, "#90CAF9", C_DISTRIBUTED, "#FFAB91"]
+
+    n_metrics = len(eui_metrics)
+    fig, axes = plt.subplots(1, n_metrics, figsize=(4 * n_metrics, 5))
+    if n_metrics == 1:
+        axes = [axes]
+
+    for ax, (eui_col, eui_label) in zip(axes, eui_metrics):
+        medians, counts = [], []
+        for sys_type, pay in combos:
+            vals = sub.loc[(sub[bcol] == sys_type) & (sub["_pay"] == pay), eui_col].dropna()
+            medians.append(vals.median() if len(vals) else 0)
+            counts.append(len(vals))
+
+        x = np.arange(len(combos))
+        bars = ax.bar(x, medians, 0.6, color=combo_colors, edgecolor="white")
+
+        for i, (med, n) in enumerate(zip(medians, counts)):
+            ax.text(i, med + 0.3, f"n={n}", ha="center", va="bottom", fontsize=7, color="dimgray")
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(combo_labels, fontsize=8)
+        ax.set_ylabel(f"{eui_label}\n(kBtu/sqft/yr)", fontsize=9)
+        ax.set_title(eui_label, fontsize=10, fontweight="bold")
+        ax.yaxis.set_minor_locator(mticker.AutoMinorLocator())
+
+    fig.suptitle(
+        "EUI by System Type × Electricity Payment\n"
+        "(RECS 2020 MF — Household Pays vs. Included in Rent)",
+        fontsize=12, fontweight="bold", y=1.02,
+    )
+    fig.tight_layout()
+
+    fname = outdir / "07_utility_payment_by_system_type.png"
+    fig.savefig(fname, dpi=200, bbox_inches="tight")
     plt.close(fig)
     logger.info("Saved %s", fname)
 
@@ -856,6 +979,10 @@ def main() -> None:
     for seg in ("all_mf", "5plus_units"):
         plot_explicit_electric_gas_eui(df, args.outdir, segment=seg)
         plot_explicit_eui_by_climate_zone(df, args.outdir, segment=seg)
+
+    # Utility payment analysis
+    plot_utility_payment_eui(df, args.outdir)
+    plot_utility_payment_by_system_type(df, args.outdir)
 
     logger.info("All presentation plots saved to %s", args.outdir)
 
