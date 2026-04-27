@@ -327,20 +327,11 @@ def plot_fuel_stratified(df: pd.DataFrame, outdir: Path) -> None:
 
     for i, p in enumerate(pvals):
         y_max = max(medians_c[i], medians_d[i])
-        bracket_y = y_max + 2
-        if p < 0.001:
-            sig_text = "***"
-        elif p < 0.01:
-            sig_text = "**"
-        elif p < 0.05:
-            sig_text = "*"
-        else:
-            sig_text = "n.s."
-        ax.plot([x[i] - width / 2, x[i] - width / 2, x[i] + width / 2, x[i] + width / 2],
-                [bracket_y, bracket_y + 1.5, bracket_y + 1.5, bracket_y],
-                color="black", linewidth=0.8)
-        ax.text(x[i], bracket_y + 2, sig_text, ha="center", va="bottom", fontsize=10, fontweight="bold")
+        sig_text = "***" if p < 0.001 else ("**" if p < 0.01 else ("*" if p < 0.05 else "n.s."))
+        ax.text(x[i], y_max + 1.5, sig_text, ha="center", va="bottom", fontsize=11, fontweight="bold")
 
+    # Headroom so annotations don't collide with the title
+    ax.set_ylim(bottom=0, top=max(max(medians_c), max(medians_d)) * 1.25)
     ax.set_ylabel("Median Site EUI (kBtu/sqft/yr)", fontsize=10)
     ax.set_xticks(x)
     ax.set_xticklabels(labels, fontsize=11)
@@ -473,8 +464,12 @@ def plot_heating_by_segment(df: pd.DataFrame, outdir: Path) -> None:
 
     for i, p in enumerate(pvals):
         y_max = max(medians_c[i], medians_d[i])
-        ax.text(x[i], y_max + 3, f"p={p:.3f}", ha="center", va="bottom", fontsize=9, color="dimgray")
+        sig_text = "***" if p < 0.001 else ("**" if p < 0.01 else ("*" if p < 0.05 else ""))
+        if sig_text:
+            ax.text(x[i], y_max + 1.5, sig_text, ha="center", va="bottom", fontsize=11, fontweight="bold")
 
+    # Headroom so annotations don't collide with the title
+    ax.set_ylim(bottom=0, top=max(max(medians_c), max(medians_d)) * 1.25)
     ax.set_ylabel("Median Heating EUI (kBtu/sqft/yr)", fontsize=10)
     ax.set_xticks(x)
     ax.set_xticklabels(labels, fontsize=11)
@@ -547,8 +542,10 @@ def plot_heating_by_fuel_5plus(df: pd.DataFrame, outdir: Path) -> None:
     for i, p in enumerate(pvals):
         y_max = max(medians_c[i], medians_d[i])
         sig_text = "***" if p < 0.001 else ("**" if p < 0.01 else ("*" if p < 0.05 else "n.s."))
-        ax.text(x[i], y_max + 3, sig_text, ha="center", va="bottom", fontsize=11, fontweight="bold")
+        ax.text(x[i], y_max + 1.5, sig_text, ha="center", va="bottom", fontsize=11, fontweight="bold")
 
+    # Headroom so annotations don't collide with the title
+    ax.set_ylim(bottom=0, top=max(max(medians_c), max(medians_d)) * 1.25)
     ax.set_ylabel("Median Heating EUI (kBtu/sqft/yr)", fontsize=10)
     ax.set_xticks(x)
     ax.set_xticklabels(labels, fontsize=11)
@@ -744,7 +741,7 @@ def plot_explicit_eui_by_climate_zone(
     zones = sorted(top_zones)
 
     n_metrics = len(eui_metrics)
-    fig, axes = plt.subplots(n_metrics, 1, figsize=(9.6, 4.5 * n_metrics), sharex=True)
+    fig, axes = plt.subplots(n_metrics, 1, figsize=(13, 3.5 * n_metrics), sharex=True)
     if n_metrics == 1:
         axes = [axes]
 
@@ -779,8 +776,9 @@ def plot_explicit_eui_by_climate_zone(
 
             if not np.isnan(pvals[i]) and pvals[i] < ALPHA:
                 y_max = max(medians_c[i], medians_d[i])
-                ax.text(x[i], y_max + 2, f"p={pvals[i]:.3f}", ha="center", va="bottom",
-                        fontsize=7, color="#D32F2F")
+                sig_text = "***" if pvals[i] < 0.001 else ("**" if pvals[i] < 0.01 else "*")
+                ax.text(x[i], y_max + 1.5, sig_text, ha="center", va="bottom",
+                        fontsize=9, fontweight="bold", color="#D32F2F")
 
         ax.set_ylabel(f"Median {eui_label}\n(kBtu/sqft/yr)", fontsize=10)
         ax.set_title(f"{eui_label}", fontsize=11, fontweight="bold")
@@ -793,7 +791,7 @@ def plot_explicit_eui_by_climate_zone(
 
     fig.suptitle(
         f"Explicit Classifications Only — EUI by Climate Zone\n"
-        f"Central vs. Distributed, {seg_label} (top {top_n} zones)",
+        f"Central vs. Distributed, {seg_label} (top {top_n} zones, * p<.05  ** p<.01  *** p<.001)",
         fontsize=13, fontweight="bold", y=1.01,
     )
     fig.tight_layout()
