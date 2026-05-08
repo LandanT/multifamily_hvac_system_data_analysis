@@ -1,8 +1,8 @@
 # Findings — Multifamily HVAC System Type & Energy Use
 
-> **Last updated:** 2026-04-24
+> **Last updated:** 2026-05-08
 > **Status:** Active — update as new analyses land
-> **Datasets:** RECS 2020 (national), RBSA 2022 (Pacific NW)
+> **Datasets:** RECS 2020 (national), RBSA 2022 (Pacific NW), FM MF Survey 2023 (national MF, directional only)
 
 ---
 
@@ -189,14 +189,16 @@ Despite these differences, the direction of the heating effect is concordant —
 | `outputs/recs/04_ols_interaction_results.csv` | RECS OLS with vintage interaction |
 | `outputs/recs/04_within_zone_results.csv` | RECS within-zone Mann-Whitney |
 | `outputs/recs/03_mann_whitney_results.csv` | RECS unadjusted Mann-Whitney (all strata) |
+| `outputs/recs/heating_sensitivity_matrix.csv` | Sensitivity matrix — all analytical slices |
 | `outputs/recs/08_forest_recs_vs_rbsa.png` | Forest plot — RECS vs RBSA OLS coefficients |
 | `outputs/recs/08_median_bars_recs_vs_rbsa.png` | Grouped bars — median EUI comparison |
 | `outputs/recs/08_recs_vs_rbsa_summary.csv` | Combined summary table |
-| `outputs/recs/07_*.png` | Presentation plots (12 figures) |
+| `outputs/recs/07_*.png` | Presentation plots (16 figures) |
 | `outputs/recs/07_explicit_electric_gas_eui.png` | Explicit-only Electric & Gas EUI — all MF |
 | `outputs/recs/07_explicit_electric_gas_eui_5plus_units.png` | Explicit-only Electric & Gas EUI — 5+ units |
-| `outputs/recs/07_explicit_eui_by_climate_zone.png` | Explicit-only EUI by climate zone — all MF |
+| `outputs/recs/07_explicit_eui_by_climate_zone.png` | Explicit-only Heating EUI by climate zone (3-panel: all fuels + electric + gas) — all MF |
+| `outputs/recs/07_explicit_eui_by_climate_zone_allfuels.png` | Explicit-only Heating EUI by climate zone (single-panel: all fuels only) — all MF |
 | `outputs/recs/07_explicit_eui_by_climate_zone_5plus_units.png` | Explicit-only EUI by climate zone — 5+ units |
-| `outputs/recs/heating_sensitivity_matrix.csv` | Sensitivity matrix — all analytical slices |
+| `outputs/recs/07_explicit_eui_by_climate_zone_allfuels_5plus_units.png` | Single-panel all-fuels — 5+ units |
 | `outputs/rbsa/04_ols_results.csv` | RBSA OLS coefficients |
 | `outputs/rbsa/03_mann_whitney_results.csv` | RBSA Mann-Whitney results |

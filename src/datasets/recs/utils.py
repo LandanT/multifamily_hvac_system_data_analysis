@@ -74,19 +74,29 @@ def filter_segment(df: pd.DataFrame, segment: str) -> pd.DataFrame:
 
 
 def filter_fuel(df: pd.DataFrame, fuel: str) -> pd.DataFrame:
-    """Filter to a heating-fuel stratum.
+    """Filter to a heating-fuel stratum (mutually exclusive).
 
     Parameters
     ----------
     fuel:
         ``"all_fuels"`` → no filter,
-        ``"electric"`` → ELWARM == 1,
-        ``"gas"`` → UGWARM == 1.
+        ``"electric"`` → ELWARM == 1 AND UGWARM != 1,
+        ``"gas"`` → UGWARM == 1 AND ELWARM != 1.
+
+    Mutual exclusivity ensures Electric Only + Gas Only subsets do not overlap
+    and sample sizes sum sensibly relative to All Fuels.
     """
-    col = FUEL_STRATA.get(fuel)
+    if fuel == "all_fuels" or fuel not in FUEL_STRATA:
+        return df
+    col = FUEL_STRATA[fuel]
     if col is None or col not in df.columns:
         return df
-    return df[df[col] == 1].copy()
+    # Determine the "other" fuel column to exclude
+    other_col = "UGWARM" if col == "ELWARM" else "ELWARM"
+    mask = df[col] == 1
+    if other_col in df.columns:
+        mask = mask & (df[other_col] != 1)
+    return df[mask].copy()
 
 
 def filter_classification_view(

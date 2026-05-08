@@ -135,7 +135,7 @@ def plot_stacked_bar(
 
     colors = [SYSTEM_COLORS.get(c, "#BDBDBD") for c in ordered_cols]
 
-    fig, ax = plt.subplots(figsize=(9, max(3, 0.6 * len(pivot))))
+    fig, ax = plt.subplots(figsize=(9.2, 5))
     pivot.plot(kind="barh", stacked=True, ax=ax, color=colors, edgecolor="white")
 
     # Annotate counts
@@ -149,13 +149,11 @@ def plot_stacked_bar(
     ax.set_title(title, fontsize=11, fontweight="bold")
     ax.legend(fontsize=8, title="System Type", bbox_to_anchor=(1.02, 1), loc="upper left", borderaxespad=0)
     fig.tight_layout()
-    fig.savefig(fname, dpi=150, bbox_inches="tight")
+    fig.savefig(fname, dpi=200, bbox_inches="tight")
     plt.close(fig)
     logger.info("Saved %s", fname)
 
 
-# ---------------------------------------------------------------------------
-# Heatmap: counts by mf_segment × unit_size_bin × system_type
 # ---------------------------------------------------------------------------
 
 def plot_count_heatmap(df: pd.DataFrame, outdir: Path) -> None:

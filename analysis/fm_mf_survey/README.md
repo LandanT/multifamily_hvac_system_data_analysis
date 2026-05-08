@@ -1,7 +1,12 @@
 # 2023 Multifamily Survey — HVAC/DHW Energy Analysis
 
 End-to-end analysis of HVAC and DHW system type (central vs. distributed)
-vs. energy consumption, using the 2023 Multifamily Survey dataset.
+vs. energy consumption, using the 2023 Fannie Mae Multifamily Survey dataset.
+
+> **Important context for newcomers:** This dataset has the smallest energy-analysis
+> subset of the three datasets (~40–107 classifiable properties per system type).
+> The FM pipeline does not have a `run_workflow.py` — run each script individually.
+> There are no `02b`, `05b`, `07`, or `08` scripts; those are RECS-only additions.
 
 ## Data
 
