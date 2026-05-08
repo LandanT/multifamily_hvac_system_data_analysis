@@ -83,6 +83,7 @@ _ENERGY_COLS = [
     "TOTALBTUWTH",
     "TOTALBTUOTH",
     "BTUEL",
+    "BTUELCOL",  # electric cooling end-use BTU
     "BTUNG",
     "BTULP",
     "BTUFO",
@@ -175,6 +176,7 @@ def load_recs(
         df["Heating_EUI_kBtu_sqft"] = _eui("TOTALBTUSPH")
 
     df["DHW_EUI_kBtu_sqft"] = _eui("TOTALBTUWTH")
+    df["Cooling_EUI_kBtu_sqft"] = _eui("BTUELCOL")  # cooling is electric-only in RECS
     df["Other_EUI_kBtu_sqft"] = _eui("TOTALBTUOTH")
     df["Electric_EUI_kBtu_sqft"] = _eui("BTUEL")
     df["Gas_EUI_kBtu_sqft"] = _eui("BTUNG")
