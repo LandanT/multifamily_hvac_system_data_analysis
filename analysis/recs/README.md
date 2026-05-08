@@ -1,17 +1,53 @@
-# RECS 2020 analysis scripts
+# RECS 2020 Analysis Scripts
 
-Run scripts in order. Scripts 02–06 consume the parquet output of `01`.
+Run scripts in order. Scripts 02+ consume the Parquet output of `01`.
+
+## Script Inventory
 
 | Script | Description |
 |--------|-------------|
-| `01_build_curated_table.py` | Load RECS microdata → classify HVAC/DHW → filter valid energy rows → output `recs2020_curated_YYYYMMDD.parquet` |
-| `02_exploratory_distributions.py` | Box plots of Site EUI by system type; IECC climate zone and vintage confounding checks; summary stats CSV |
-| `03_statistical_testing.py` | Mann-Whitney U (Central vs Distributed EUI); rank-biserial effect size; stratified by ELWARM / UGWARM fuel flag |
-| `04_climate_vintage_controlled.py` | OLS regression (EUI ~ system_type + IECC_climate_code + YEARMADERANGE + log(TOTSQFT_EN)); within-climate-zone Mann-Whitney; vintage scatter plots |
-| `05_fuel_breakdown.py` | Stacked bar charts of household fuel-use share (heating + water heating) by system class |
-| `06_compare_with_other.py` | Side-by-side comparison vs FM MF Survey and/or RBSA — NOT merged; see structural differences note in output |
+| `01_build_curated_table.py` | Load RECS microdata → classify HVAC/DHW → add derived columns (`mf_segment`, `heating_fuel_group`, `amenity_flag`, etc.) → filter valid energy rows → output `recs2020_curated_YYYYMMDD.parquet` |
+| `02_exploratory_distributions.py` | Box plots of Site/Heating/Cooling/DHW EUI by system type; IECC climate zone and vintage confounding checks; cross-tabs; summary stats CSV |
+| `02b_sample_balance_and_prevalence.py` | Where do Central and Distributed coexist? Prevalence tables, stacked bars, and heatmaps by segment × unit_size_bin × classification view (explicit vs. inferred) |
+| `03_statistical_testing.py` | Mann-Whitney U across a grid of segments × fuel strata × classification views; primary outcome = Heating EUI; secondary = Site EUI; reports U, p-value, rank-biserial effect size |
+| `04_climate_vintage_controlled.py` | OLS regression (`EUI ~ system_type + IECC_climate_code + YEARMADERANGE + log(TOTSQFT_EN)`); within-climate-zone Mann-Whitney; vintage interaction models; scatter plots |
+| `05_fuel_breakdown.py` | Stacked bar charts of household fuel-use share (heating + water heating) by system class using binary fuel flags (`ELWARM`, `UGWARM`, etc.) |
+| `05b_sensitivity_matrix.py` | One row per analytical slice (~32 combinations): n, medians, delta, OLS coefficient/p-value; amenity/EV exclusion sensitivities |
+| `06_compare_with_other.py` | Side-by-side comparison vs FM MF Survey and/or RBSA — NOT merged; loads each dataset independently |
+| `07_presentation_plots.py` | Presentation-quality figures: forest plot (OLS coefficients), grouped bars, climate zone comparisons, fuel-stratified plots, explicit-vs-inferred views, electric/gas EUI breakdowns |
+| `08_cross_dataset_comparison.py` | RECS vs RBSA from pre-computed OLS/MW CSVs; forest plot of coefficients; grouped median bars; summary table |
+| `run_workflow.py` | Sequential runner for steps 01→02→02b→03→04→05→05b→06→07; supports `--skip-steps`, `--dry-run` |
 
 ## Typical workflow
+
+### Option A: Use the workflow runner (recommended)
+
+```bash
+# Full pipeline from raw CSV (steps 01 through 07)
+python analysis/recs/run_workflow.py \
+    --data data/recs/recs2020_public_v7.csv \
+    --outdir outputs/recs
+
+# If step 01 already ran, skip it
+python analysis/recs/run_workflow.py \
+    --data data/recs/recs2020_public_v7.csv \
+    --outdir outputs/recs \
+    --skip-steps 01
+
+# Include cross-dataset comparison with FM and RBSA
+python analysis/recs/run_workflow.py \
+    --data data/recs/recs2020_public_v7.csv \
+    --outdir outputs/recs \
+    --fm-data data/fm_mf_survey/2023_Multifamily_Survey_dataset_FINAL.xlsx \
+    --rbsa-dir data/rbsa/
+
+# Preview without executing
+python analysis/recs/run_workflow.py \
+    --data data/recs/recs2020_public_v7.csv \
+    --outdir outputs/recs --dry-run
+```
+
+### Option B: Run scripts individually
 
 ```bash
 # Step 1: Place the RECS 2020 public-use file in data/recs/
@@ -49,6 +85,19 @@ python analysis/recs/06_compare_with_other.py \
     --fm-data path/to/2023_Multifamily_Survey_dataset_FINAL.xlsx \
     --rbsa-dir path/to/2022_RBSA_Datasets/ \
     --outdir outputs/recs
+
+# Step 8: Presentation plots
+python analysis/recs/07_presentation_plots.py \
+    --curated outputs/recs/recs2020_curated_*.parquet \
+    --outdir outputs/recs
+
+# Step 9: Cross-dataset comparison (RECS vs RBSA from pre-computed CSVs)
+python analysis/recs/08_cross_dataset_comparison.py \
+    --recs-ols outputs/recs/04_ols_results.csv \
+    --recs-mw  outputs/recs/03_mann_whitney_results.csv \
+    --rbsa-ols outputs/rbsa/04_ols_results.csv \
+    --rbsa-mw  outputs/rbsa/03_mann_whitney_results.csv \
+    --outdir   outputs/recs
 ```
 
 ## Edit system classification rules in
