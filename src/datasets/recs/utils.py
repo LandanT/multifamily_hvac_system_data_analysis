@@ -145,3 +145,52 @@ def friendly_label(segment: str, fuel: str, view: str) -> str:
     parts.append(fuel.replace("_", " ").title())
     parts.append(view.replace("_", " "))
     return " | ".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# YEARMADERANGE labels and energy-code-aligned vintage bins
+# ---------------------------------------------------------------------------
+
+# RECS 2020 YEARMADERANGE ordinal code → human-readable decade label
+YEARMADERANGE_LABELS: dict[int, str] = {
+    1: "Before 1950",
+    2: "1950–1959",
+    3: "1960–1969",
+    4: "1970–1979",
+    5: "1980–1989",
+    6: "1990–1999",
+    7: "2000–2009",
+    8: "2010–2015",
+    9: "2016–2020",
+}
+
+# Energy-code-aligned bins (aligned with ASHRAE 90.1 editions):
+#   Pre-1980 (codes 1–4): Before federal/state energy codes
+#   1980–1999 (codes 5–6): Early code era (90A-1980, 90.1-1989)
+#   2000+ (codes 7–9): Modern code era (90.1-2001 through 90.1-2019)
+VINTAGE_BIN_MAP: dict[int, str] = {
+    1: "Pre-1980",
+    2: "Pre-1980",
+    3: "Pre-1980",
+    4: "Pre-1980",
+    5: "1980–1999",
+    6: "1980–1999",
+    7: "2000+",
+    8: "2000+",
+    9: "2000+",
+}
+
+# Ordered categories for plotting
+VINTAGE_BIN_ORDER = ["Pre-1980", "1980–1999", "2000+"]
+
+
+def add_vintage_bin(df: pd.DataFrame) -> pd.DataFrame:
+    """Add a ``vintage_bin`` column with energy-code-aligned categories.
+
+    Groups YEARMADERANGE into three bins aligned with major energy code eras:
+    Pre-1980, 1980–1999, 2000+.  Returns the DataFrame with the new column.
+    """
+    ymr = pd.to_numeric(df.get("YEARMADERANGE"), errors="coerce")
+    df["vintage_bin"] = ymr.map(VINTAGE_BIN_MAP)
+    return df
+

@@ -42,6 +42,9 @@ from src.datasets.recs.utils import (
     filter_segment,
     filter_fuel,
     filter_classification_view,
+    add_vintage_bin,
+    VINTAGE_BIN_ORDER,
+    YEARMADERANGE_LABELS,
 )
 
 logger = get_logger("recs.07_plots")
@@ -1063,6 +1066,381 @@ def plot_utility_payment_by_system_type(df: pd.DataFrame, outdir: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 12. Steam/hydronic sensitivity — subfolder analysis
+# ---------------------------------------------------------------------------
+
+def _steam_sensitivity_summary(df: pd.DataFrame, outdir: Path) -> None:
+    """Write a CSV summarising sample impact of excluding EQUIPM=2 (hydronic)."""
+    bcol = "heating_system_type_binary"
+    eui = "Heating_EUI_kBtu_sqft"
+    if bcol not in df.columns or "EQUIPM" not in df.columns:
+        return
+
+    full = df[df[bcol].isin(["Central", "Distributed"])].copy()
+    excl = full[full["EQUIPM"] != 2].copy()
+
+    rows = []
+    for label, sub in [("Full Dataset", full), ("Excluding EQUIPM=2 (Hydronic)", excl)]:
+        c = sub[sub[bcol] == "Central"]
+        d = sub[sub[bcol] == "Distributed"]
+        rows.append({
+            "Dataset": label,
+            "Total_n": len(sub),
+            "Central_n": len(c),
+            "Distributed_n": len(d),
+            "Central_median_HeatingEUI": c[eui].median() if len(c) else None,
+            "Distributed_median_HeatingEUI": d[eui].median() if len(d) else None,
+        })
+
+    # Breakdown of Central by delivery type
+    central_full = full[full[bcol] == "Central"]
+    equipm_counts = central_full["EQUIPM"].value_counts().sort_index()
+    delivery_col = "heating_delivery_type"
+    if delivery_col in central_full.columns:
+        delivery_counts = central_full[delivery_col].value_counts()
+    else:
+        delivery_counts = pd.Series(dtype=int)
+
+    summary_df = pd.DataFrame(rows)
+    summary_df.to_csv(outdir / "excl_steam_sample_summary.csv", index=False)
+
+    # Also write delivery type breakdown
+    if not delivery_counts.empty:
+        delivery_counts.to_csv(outdir / "excl_steam_central_delivery_breakdown.csv",
+                               header=["count"])
+
+    logger.info("Wrote steam exclusion summary to %s", outdir)
+
+
+def plot_excl_steam_comparison(df: pd.DataFrame, outdir: Path) -> None:
+    """Side-by-side: Heating EUI Central vs Distributed, full data vs excl EQUIPM=2.
+
+    NOTE: EQUIPM=2 is 'Steam or hot-water system with radiators or pipes'.
+    Excluding it removes ALL hydronic heating, not just steam.  This caveat
+    is noted in the plot subtitle.
+    """
+    bcol = "heating_system_type_binary"
+    eui = "Heating_EUI_kBtu_sqft"
+    if bcol not in df.columns or eui not in df.columns or "EQUIPM" not in df.columns:
+        return
+
+    full = df[df[bcol].isin(["Central", "Distributed"])].copy()
+    excl = full[full["EQUIPM"] != 2].copy()
+
+    datasets = [("Full Dataset", full), ("Excl. Hydronic\n(EQUIPM≠2)", excl)]
+    labels, medians_c, medians_d, ns_c, ns_d, pvals = [], [], [], [], [], []
+
+    for dlabel, ddf in datasets:
+        c = ddf.loc[ddf[bcol] == "Central", eui].dropna()
+        d = ddf.loc[ddf[bcol] == "Distributed", eui].dropna()
+        if len(c) < 2 or len(d) < 2:
+            continue
+        _, p = stats.mannwhitneyu(c, d, alternative="two-sided")
+        labels.append(dlabel)
+        medians_c.append(c.median())
+        medians_d.append(d.median())
+        ns_c.append(len(c))
+        ns_d.append(len(d))
+        pvals.append(p)
+
+    if not labels:
+        return
+
+    x = np.arange(len(labels))
+    width = 0.32
+    fig, ax = plt.subplots(figsize=(7, 5))
+
+    bars_c = ax.bar(x - width / 2, medians_c, width, label="Central", color=C_CENTRAL, edgecolor="white")
+    bars_d = ax.bar(x + width / 2, medians_d, width, label="Distributed", color=C_DISTRIBUTED, edgecolor="white")
+
+    for bar, n in zip(bars_c, ns_c):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.3,
+                f"n={n}", ha="center", va="bottom", fontsize=8, color="dimgray")
+    for bar, n in zip(bars_d, ns_d):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.3,
+                f"n={n}", ha="center", va="bottom", fontsize=8, color="dimgray")
+
+    for i, p in enumerate(pvals):
+        y_max = max(medians_c[i], medians_d[i])
+        sig_text = "***" if p < 0.001 else ("**" if p < 0.01 else ("*" if p < 0.05 else "n.s."))
+        ax.text(x[i], y_max + 2.5, sig_text, ha="center", va="bottom", fontsize=11, fontweight="bold")
+
+    ax.set_ylim(bottom=0, top=max(max(medians_c), max(medians_d)) * 1.3)
+    ax.set_ylabel("Median Heating EUI (kBtu/sqft/yr)", fontsize=10)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=11)
+    ax.legend(fontsize=10, bbox_to_anchor=(1.02, 1), loc="upper left", borderaxespad=0)
+    ax.set_title(
+        "Sensitivity: Heating EUI With & Without Hydronic Systems\n"
+        "(RECS 2020, 5+ Unit MF)\n"
+        "⚠ EQUIPM=2 removes all hydronic heating, not just steam",
+        fontsize=10, fontweight="bold",
+    )
+    fig.tight_layout()
+
+    fname = outdir / "07_sensitivity_excl_steam_comparison.png"
+    fig.savefig(fname, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Saved %s", fname)
+
+
+def run_excl_steam_subfolder(df: pd.DataFrame, outdir: Path) -> None:
+    """Generate key plots with EQUIPM=2 excluded, writing to excl_steam/ subfolder."""
+    if "EQUIPM" not in df.columns:
+        logger.warning("EQUIPM column not found — skipping steam exclusion analysis")
+        return
+
+    steam_dir = outdir / "excl_steam"
+    steam_dir.mkdir(parents=True, exist_ok=True)
+
+    # Filter: 5+ unit MF, exclude EQUIPM=2
+    seg_df = filter_segment(df, "5plus_units")
+    excl = seg_df[seg_df["EQUIPM"] != 2].copy()
+
+    logger.info(
+        "Steam exclusion: %d → %d rows (removed %d EQUIPM=2 hydronic)",
+        len(seg_df), len(excl), len(seg_df) - len(excl),
+    )
+
+    # Write summary CSV
+    _steam_sensitivity_summary(seg_df, steam_dir)
+
+    # Re-run core plots on filtered data
+    plot_median_comparison(excl, steam_dir)
+    plot_fuel_stratified(excl, steam_dir)
+    plot_forest(excl, steam_dir)
+
+    logger.info("Wrote steam-excluded plots to %s", steam_dir)
+
+
+# ---------------------------------------------------------------------------
+# 13. System type prevalence by vintage (5+ MF)
+# ---------------------------------------------------------------------------
+
+def plot_system_type_by_vintage(df: pd.DataFrame, outdir: Path) -> None:
+    """Stacked bar: % Central vs Distributed by vintage bin (5+ unit MF)."""
+    bcol = "heating_system_type_binary"
+    if bcol not in df.columns or "YEARMADERANGE" not in df.columns:
+        return
+
+    sub = filter_segment(df, "5plus_units")
+    sub = add_vintage_bin(sub)
+    sub = sub[sub[bcol].isin(["Central", "Distributed"]) & sub["vintage_bin"].notna()].copy()
+
+    if sub.empty:
+        return
+
+    # Cross-tab: vintage_bin × system type (proportions)
+    ct = pd.crosstab(sub["vintage_bin"], sub[bcol], normalize="index")
+    ct = ct.reindex(VINTAGE_BIN_ORDER).dropna(how="all")
+    ct_counts = pd.crosstab(sub["vintage_bin"], sub[bcol])
+    ct_counts = ct_counts.reindex(VINTAGE_BIN_ORDER).dropna(how="all")
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    # Stacked bar
+    bottom = np.zeros(len(ct))
+    for col, color in [("Central", C_CENTRAL), ("Distributed", C_DISTRIBUTED)]:
+        if col not in ct.columns:
+            continue
+        vals = ct[col].values
+        bars = ax.bar(ct.index, vals, bottom=bottom, color=color, label=col, edgecolor="white")
+        # Annotate with count and %
+        for i, (v, b) in enumerate(zip(vals, bottom)):
+            n = ct_counts.iloc[i].get(col, 0)
+            if v > 0.05:  # Only label if visible
+                ax.text(i, b + v / 2, f"{v:.0%}\n(n={n})",
+                        ha="center", va="center", fontsize=8, color="white", fontweight="bold")
+        bottom += vals
+
+    ax.set_ylabel("Proportion of Classified Units", fontsize=10)
+    ax.set_xlabel("Vintage (Energy Code Era)", fontsize=10)
+    ax.set_ylim(0, 1.0)
+    ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0))
+    ax.legend(fontsize=10, bbox_to_anchor=(1.02, 1), loc="upper left", borderaxespad=0)
+    ax.set_title(
+        "System Type Prevalence by Building Vintage\n"
+        "(RECS 2020, 5+ Unit Multifamily)",
+        fontsize=12, fontweight="bold",
+    )
+    fig.tight_layout()
+
+    fname = outdir / "07_system_type_by_vintage_5plus.png"
+    fig.savefig(fname, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Saved %s", fname)
+
+
+# ---------------------------------------------------------------------------
+# 14. Heating EUI by vintage × system type (5+ MF)
+# ---------------------------------------------------------------------------
+
+def plot_eui_by_vintage_and_system_type(df: pd.DataFrame, outdir: Path, min_n: int = 10) -> None:
+    """Grouped bar: median Heating EUI per vintage bin, Central vs Distributed."""
+    bcol = "heating_system_type_binary"
+    eui = "Heating_EUI_kBtu_sqft"
+    if bcol not in df.columns or eui not in df.columns or "YEARMADERANGE" not in df.columns:
+        return
+
+    sub = filter_segment(df, "5plus_units")
+    sub = add_vintage_bin(sub)
+    sub = sub[sub[bcol].isin(["Central", "Distributed"]) & sub["vintage_bin"].notna()].copy()
+
+    if sub.empty:
+        return
+
+    bins = [b for b in VINTAGE_BIN_ORDER if b in sub["vintage_bin"].values]
+    medians_c, medians_d, ns_c, ns_d, pvals = [], [], [], [], []
+
+    for vbin in bins:
+        bdf = sub[sub["vintage_bin"] == vbin]
+        c = bdf.loc[bdf[bcol] == "Central", eui].dropna()
+        d = bdf.loc[bdf[bcol] == "Distributed", eui].dropna()
+        medians_c.append(c.median() if len(c) else 0)
+        medians_d.append(d.median() if len(d) else 0)
+        ns_c.append(len(c))
+        ns_d.append(len(d))
+        if len(c) >= min_n and len(d) >= min_n:
+            _, p = stats.mannwhitneyu(c, d, alternative="two-sided")
+            pvals.append(p)
+        else:
+            pvals.append(np.nan)
+
+    x = np.arange(len(bins))
+    width = 0.35
+    fig, ax = plt.subplots(figsize=(9, 5))
+
+    bars_c = ax.bar(x - width / 2, medians_c, width, label="Central", color=C_CENTRAL, edgecolor="white")
+    bars_d = ax.bar(x + width / 2, medians_d, width, label="Distributed", color=C_DISTRIBUTED, edgecolor="white")
+
+    for i in range(len(bins)):
+        ax.text(x[i] - width / 2, medians_c[i] + 0.3, f"n={ns_c[i]}",
+                ha="center", va="bottom", fontsize=8, color="dimgray")
+        ax.text(x[i] + width / 2, medians_d[i] + 0.3, f"n={ns_d[i]}",
+                ha="center", va="bottom", fontsize=8, color="dimgray")
+
+        if not np.isnan(pvals[i]):
+            y_max = max(medians_c[i], medians_d[i])
+            sig_text = "***" if pvals[i] < 0.001 else ("**" if pvals[i] < 0.01 else ("*" if pvals[i] < 0.05 else "n.s."))
+            ax.text(x[i], y_max + 1.5, sig_text, ha="center", va="bottom",
+                    fontsize=10, fontweight="bold")
+
+    ax.set_ylim(bottom=0)
+    ax.set_ylabel("Median Heating EUI (kBtu/sqft/yr)", fontsize=10)
+    ax.set_xlabel("Vintage (Energy Code Era)", fontsize=10)
+    ax.set_xticks(x)
+    ax.set_xticklabels(bins, fontsize=10)
+    ax.legend(fontsize=10, bbox_to_anchor=(1.02, 1), loc="upper left", borderaxespad=0)
+    ax.set_title(
+        "Heating EUI by Vintage & System Type\n"
+        "(RECS 2020, 5+ Unit MF — does EUI gap persist across eras?)\n"
+        "* p<.05  ** p<.01  *** p<.001  (Mann-Whitney, min n=10/group)",
+        fontsize=10, fontweight="bold",
+    )
+    fig.tight_layout()
+
+    fname = outdir / "07_eui_by_vintage_and_system_type.png"
+    fig.savefig(fname, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Saved %s", fname)
+
+
+# ---------------------------------------------------------------------------
+# 15. Forced Air vs Hydronic within Central heating
+# ---------------------------------------------------------------------------
+
+def plot_forced_air_vs_hydronic(df: pd.DataFrame, outdir: Path) -> None:
+    """3-way bar: Hydronic Central vs Forced Air Central vs Distributed.
+
+    Shows whether the Central EUI premium is specific to hydronic/steam systems.
+    """
+    bcol = "heating_system_type_binary"
+    eui = "Heating_EUI_kBtu_sqft"
+    delivery_col = "heating_delivery_type"
+    if bcol not in df.columns or eui not in df.columns:
+        return
+
+    sub = filter_segment(df, "5plus_units")
+    sub = sub[sub[eui].notna()].copy()
+
+    # Build the three groups
+    if delivery_col in sub.columns:
+        hydronic = sub[(sub[bcol] == "Central") & (sub[delivery_col] == "Hydronic")]
+        forced_air = sub[(sub[bcol] == "Central") & (sub[delivery_col] == "Forced Air")]
+    else:
+        # Fallback: use EQUIPM codes directly
+        hydronic = sub[(sub[bcol] == "Central") & (sub["EQUIPM"] == 2)]
+        forced_air = sub[(sub[bcol] == "Central") & (sub["EQUIPM"].isin([3, 4]))]
+
+    distributed = sub[sub[bcol] == "Distributed"]
+
+    groups = [
+        ("Central\n(Hydronic)", hydronic, "#1565C0"),
+        ("Central\n(Forced Air)", forced_air, "#64B5F6"),
+        ("Distributed", distributed, C_DISTRIBUTED),
+    ]
+
+    labels, medians, counts, colors = [], [], [], []
+    eui_arrays = []  # for pairwise tests
+
+    for glabel, gdf, gcolor in groups:
+        vals = gdf[eui].dropna()
+        if len(vals) < 2:
+            continue
+        labels.append(glabel)
+        medians.append(vals.median())
+        counts.append(len(vals))
+        colors.append(gcolor)
+        eui_arrays.append(vals)
+
+    if len(labels) < 2:
+        return
+
+    x = np.arange(len(labels))
+    fig, ax = plt.subplots(figsize=(8, 5))
+    bars = ax.bar(x, medians, 0.5, color=colors, edgecolor="white")
+
+    for i, (med, n) in enumerate(zip(medians, counts)):
+        ax.text(i, med + 0.5, f"n={n}\nmed={med:.1f}",
+                ha="center", va="bottom", fontsize=9, color="dimgray")
+
+    # Pairwise Mann-Whitney (show above bars as annotations)
+    pairwise_results = []
+    for i in range(len(eui_arrays)):
+        for j in range(i + 1, len(eui_arrays)):
+            if len(eui_arrays[i]) >= 2 and len(eui_arrays[j]) >= 2:
+                _, p = stats.mannwhitneyu(eui_arrays[i], eui_arrays[j], alternative="two-sided")
+                pairwise_results.append((labels[i], labels[j], p))
+
+    # Add pairwise p-values as text below the plot
+    if pairwise_results:
+        txt_lines = ["Pairwise Mann-Whitney:"]
+        for a, b, p in pairwise_results:
+            sig = "***" if p < 0.001 else ("**" if p < 0.01 else ("*" if p < 0.05 else "n.s."))
+            txt_lines.append(f"  {a.replace(chr(10),' ')} vs {b.replace(chr(10),' ')}: p={p:.4f} {sig}")
+        ax.text(0.02, 0.98, "\n".join(txt_lines), transform=ax.transAxes,
+                fontsize=8, va="top", ha="left", family="monospace",
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="lightyellow", alpha=0.8))
+
+    ax.set_ylim(bottom=0, top=max(medians) * 1.4)
+    ax.set_ylabel("Median Heating EUI (kBtu/sqft/yr)", fontsize=10)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=10)
+    ax.set_title(
+        "Heating EUI: Hydronic vs Forced Air (Central) vs Distributed\n"
+        "(RECS 2020, 5+ Unit MF)\n"
+        "Is the Central premium driven by hydronic/steam systems?",
+        fontsize=10, fontweight="bold",
+    )
+    fig.tight_layout()
+
+    fname = outdir / "07_forced_air_vs_hydronic.png"
+    fig.savefig(fname, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Saved %s", fname)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -1102,6 +1480,16 @@ def main() -> None:
     # Utility payment analysis
     plot_utility_payment_eui(df, args.outdir)
     plot_utility_payment_by_system_type(df, args.outdir)
+
+    # --- New: Vintage & delivery type analysis ---
+    plot_system_type_by_vintage(df, args.outdir)
+    plot_eui_by_vintage_and_system_type(df, args.outdir)
+    plot_forced_air_vs_hydronic(df, args.outdir)
+
+    # --- New: Steam/hydronic sensitivity (subfolder) ---
+    seg5 = filter_segment(df, "5plus_units")
+    plot_excl_steam_comparison(seg5, args.outdir)
+    run_excl_steam_subfolder(df, args.outdir)
 
     logger.info("All presentation plots saved to %s", args.outdir)
 

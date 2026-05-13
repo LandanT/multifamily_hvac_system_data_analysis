@@ -197,9 +197,19 @@ def main() -> None:
     df.loc[ugwarm & ~elwarm, "heating_fuel_group"] = "gas"
     df.loc[elwarm & ugwarm, "heating_fuel_group"] = "both"
 
+    # heating_delivery_type: Hydronic vs Forced Air (from EQUIPM codes)
+    # EQUIPM=2: Steam or hot-water system with radiators/pipes → "Hydronic"
+    # EQUIPM=3: Central furnace → "Forced Air"
+    # EQUIPM=4: Central heat pump → "Forced Air"
+    # Other/missing → NaN (distributed equipment or unknown)
+    _DELIVERY_MAP = {2.0: "Hydronic", 3.0: "Forced Air", 4.0: "Forced Air"}
+    equipm = pd.to_numeric(df.get("EQUIPM"), errors="coerce")
+    df["heating_delivery_type"] = equipm.map(_DELIVERY_MAP)
+
     logger.info(
         "Derived columns added: mf_segment, unit_size_bin, "
-        "heating_classification_mode, amenity_flag, ev_flag, heating_fuel_group"
+        "heating_classification_mode, amenity_flag, ev_flag, "
+        "heating_fuel_group, heating_delivery_type"
     )
 
     # ------------------------------------------------------------------
